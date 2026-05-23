@@ -1,0 +1,27 @@
+# AWS App Runner config for convis-web (Next.js frontend).
+version: 1.0
+runtime: docker
+build:
+  commands:
+    build:
+      - echo "Image is pre-built; App Runner pulls from ECR"
+run:
+  runtime-version: latest
+  # Next.js standalone build — server.js is the entrypoint.
+  command: HOSTNAME=0.0.0.0 node server.js
+  network:
+    port: 3000
+    env: PORT
+  env:
+    - name: PORT
+      value: "3000"
+    - name: NODE_ENV
+      value: "production"
+    # NEXT_PUBLIC_* vars are baked into the client bundle at BUILD time, NOT
+    # runtime. Set them as build-args in the Dockerfile or via a separate
+    # .env.production file checked into the build context (no secrets — these
+    # ship to the browser).
+    - name: NEXT_PUBLIC_API_URL
+      value: "https://api.convis.ai"          # public; not a secret
+    - name: NEXT_PUBLIC_API_BASE_URL
+      value: "https://api.convis.ai"

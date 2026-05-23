@@ -1,0 +1,49 @@
+{
+  "family": "convis-livekit-agent",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::${ACCT}:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::${ACCT}:role/convis-agent-task-role",
+  "containerDefinitions": [
+    {
+      "name": "livekit-agent",
+      "image": "${ACCT}.dkr.ecr.${REGION}.amazonaws.com/convis-api:latest",
+      "command": [
+        "python",
+        "-m",
+        "app.services.livekit.agent_worker",
+        "start"
+      ],
+      "essential": true,
+      "environment": [
+        { "name": "ENVIRONMENT", "value": "production" },
+        { "name": "DATABASE_NAME", "value": "convis_python" },
+        { "name": "LIVEKIT_AGENT_NAME", "value": "convis-agent" }
+      ],
+      "secrets": [
+        { "name": "MONGODB_URI",          "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/mongodb_uri" },
+        { "name": "JWT_SECRET",           "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/jwt_secret" },
+        { "name": "ENCRYPTION_KEY",       "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/encryption_key" },
+        { "name": "EMAIL_USER",           "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/email_user" },
+        { "name": "EMAIL_PASS",           "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/email_pass" },
+        { "name": "OPENAI_API_KEY",       "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/openai_api_key" },
+        { "name": "DEEPGRAM_API_KEY",     "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/deepgram_api_key" },
+        { "name": "ELEVENLABS_API_KEY",   "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/elevenlabs_api_key" },
+        { "name": "LIVEKIT_URL",          "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/livekit_url" },
+        { "name": "LIVEKIT_API_KEY",      "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/livekit_api_key" },
+        { "name": "LIVEKIT_API_SECRET",   "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/livekit_api_secret" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/convis-livekit-agent",
+          "awslogs-create-group": "true",
+          "awslogs-region": "${REGION}",
+          "awslogs-stream-prefix": "agent"
+        }
+      }
+    }
+  ]
+}

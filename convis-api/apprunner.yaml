@@ -1,0 +1,82 @@
+# AWS App Runner config for convis-api (FastAPI backend).
+#
+# This file is used when App Runner deploys from a GitHub source. When
+# deploying from an ECR image (recommended — see deployment-docs/AWS_APP_RUNNER.md)
+# this file is not strictly used by App Runner, but kept here as the source of
+# truth for the runtime command and env wiring.
+#
+# IMPORTANT: secrets MUST come from AWS Secrets Manager via the App Runner
+# instance role — never hardcode them here. See deployment-docs/AWS_APP_RUNNER.md.
+version: 1.0
+runtime: docker
+build:
+  commands:
+    build:
+      - echo "Image is pre-built; App Runner pulls from ECR"
+run:
+  runtime-version: latest
+  # gunicorn with 2 uvicorn workers @ 1 vCPU is the App Runner sweet spot.
+  # --timeout 60 catches stuck requests (LiveKit/Mongo timeouts already cap
+  # downstream waits at 10 s).
+  command: >
+    gunicorn app.main:app
+    --worker-class uvicorn.workers.UvicornWorker
+    --workers 2
+    --bind 0.0.0.0:8000
+    --timeout 60
+    --graceful-timeout 30
+    --keep-alive 5
+    --access-logfile -
+    --error-logfile -
+  network:
+    port: 8000
+    env: PORT
+  env:
+    - name: PORT
+      value: "8000"
+    - name: ENVIRONMENT
+      value: "production"
+    - name: DATABASE_NAME
+      value: "convis_python"
+    - name: LIVEKIT_AGENT_NAME
+      value: "convis-agent"
+    - name: API_BASE_URL
+      value: "https://api.convis.ai"          # update to your real domain
+    - name: FRONTEND_URL
+      value: "https://app.convis.ai"          # update to your real domain
+    - name: CORS_ORIGINS
+      value: "https://app.convis.ai"          # tight by default; comma-separated for more
+  # Secrets pulled from AWS Secrets Manager. Each ARN must be granted to the
+  # App Runner instance role (see deployment-docs/AWS_APP_RUNNER.md).
+  secrets:
+    - name: MONGODB_URI
+      value-from: "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/mongodb_uri"
+    - name: JWT_SECRET
+      value-from: "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/jwt_secret"
+    - name: ENCRYPTION_KEY
+      value-from: "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/encryption_key"
+    - name: EMAIL_USER
+      value-from: "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/email_user"
+    - name: EMAIL_PASS
+      value-from: "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/email_pass"
+    - name: OPENAI_API_KEY
+      value-from: "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/openai_api_key"
+    - name: DEEPGRAM_API_KEY
+      value-from: "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/deepgram_api_key"
+    - name: ELEVENLABS_API_KEY
+      value-from: "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/elevenlabs_api_key"
+    - name: LIVEKIT_URL
+      value-from: "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/livekit_url"
+    - name: LIVEKIT_API_KEY
+      value-from: "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/livekit_api_key"
+    - name: LIVEKIT_API_SECRET
+      value-from: "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/livekit_api_secret"
+    - name: LIVEKIT_SIP_INBOUND_HOST
+      value-from: "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/livekit_sip_inbound_host"
+    # OPTIONAL — only required if using LiveKit Outbound Trunk path:
+    # - name: LIVEKIT_SIP_OUTBOUND_TRUNK_ID
+    #   value-from: "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/livekit_sip_outbound_trunk_id"
+    - name: TWILIO_ACCOUNT_SID
+      value-from: "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/twilio_account_sid"
+    - name: TWILIO_AUTH_TOKEN
+      value-from: "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/twilio_auth_token"
