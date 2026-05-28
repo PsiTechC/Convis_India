@@ -78,8 +78,8 @@ slowapi
 livekit>=0.17.0
 livekit-api>=0.8.0
 livekit-agents>=0.12.0
-livekit-plugins-deepgram>=0.6.0
-livekit-plugins-openai>=0.10.0
-livekit-plugins-elevenlabs>=0.7.0
-livekit-plugins-cartesia>=0.4.0
+# livekit-plugins-openai is a transitive dependency of livekit-plugins-sarvam
+# (sarvam.LLM extends OpenAILLM) — keep it pinned via Sarvam, not directly.
+# Deepgram + ElevenLabs + Cartesia removed in the 2026-05 Sarvam migration.
+livekit-plugins-sarvam>=1.5.12
 livekit-plugins-silero>=0.7.0

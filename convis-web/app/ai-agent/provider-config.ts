@@ -1,127 +1,157 @@
-// Provider configuration — LiveKit stack only:
-//   ASR:  Deepgram
-//   LLM:  OpenAI
-//   TTS:  ElevenLabs
-// All pricing data accurate as of January 2025.
+// Provider configuration — Convis-India stack (full Sarvam, no fallback).
+//   ASR:  Sarvam Saaras v3 (mode=transcribe — keeps source language)
+//   LLM:  Sarvam-105b (with /nothink injected by backend to disable reasoning)
+//   TTS:  Sarvam Bulbul v3 (default) — v2 opt-in for v2-only voices like anushka
+//
+// Pricing data is approximate and used for the cost calculator only.
 
 export const ENHANCED_TTS_VOICES = {
-  elevenlabs: [
-    // Female voices - American
-    { value: 'EXAVITQu4vr4xnSDxMaL', label: 'Sarah - American Female (Young)', gender: 'female', accent: 'American' },
-    { value: 'FGY2WhTYpPnrIDTdsKH5', label: 'Laura - American Female (Young)', gender: 'female', accent: 'American' },
-    { value: 'cgSgspJ2msm6clMCkdW9', label: 'Jessica - American Female (Young)', gender: 'female', accent: 'American' },
-    { value: 'XrExE9yKIg1WjnnlVkGX', label: 'Matilda - American Female (Middle-aged)', gender: 'female', accent: 'American' },
-    { value: 'pFZP5JQG7iQjIQuC4Bku', label: 'Lily - Female (Middle-aged)', gender: 'female', accent: 'American' },
-    // Female voices - British
-    { value: 'Xb7hH8MSUJpSbSDYk0k2', label: 'Alice - British Female (Middle-aged)', gender: 'female', accent: 'British' },
-    { value: 'FrzKLwOr0y3qieiphjs2', label: 'Paula - British Female (Young)', gender: 'female', accent: 'British' },
-    // Male voices - American
-    { value: '2EiwWnXFnvU5JabPnv8n', label: 'Clyde - American Male (Middle-aged)', gender: 'male', accent: 'American' },
-    { value: 'CwhRBWXzGAHq8TQ4Fs17', label: 'Roger - American Male (Middle-aged)', gender: 'male', accent: 'American' },
-    { value: 'TX3LPaxmHKxFdv7VOQHJ', label: 'Liam - American Male (Young)', gender: 'male', accent: 'American' },
-    { value: 'SOYHLrjzK2X1ezoPC6cr', label: 'Harry - American Male (Young)', gender: 'male', accent: 'American' },
-    { value: 'bIHbv24MWmeRgasZH58o', label: 'Will - American Male (Young)', gender: 'male', accent: 'American' },
-    { value: 'cjVigY5qzO86Huf0OWal', label: 'Eric - American Male (Middle-aged)', gender: 'male', accent: 'American' },
-    { value: 'iP95p4xoKVk53GoZ742B', label: 'Chris - American Male (Middle-aged)', gender: 'male', accent: 'American' },
-    { value: 'nPczCjzI2devNBz1zQrb', label: 'Brian - American Male (Middle-aged)', gender: 'male', accent: 'American' },
-    { value: 'pqHfZKP75CvOlQylNhV4', label: 'Bill - American Male (Old)', gender: 'male', accent: 'American' },
-    // Male voices - British
-    { value: 'JBFqnCBsd6RMkjVDRZzb', label: 'George - British Male (Middle-aged)', gender: 'male', accent: 'British' },
-    { value: 'onwK4e9ZLuTAKqWW03F9', label: 'Daniel - British Male (Middle-aged)', gender: 'male', accent: 'British' },
-    { value: 'N2lVS1w4EtoT3dr4eOWO', label: 'Callum - Male (Middle-aged)', gender: 'male', accent: 'British' },
-    // Male voices - Other
-    { value: 'IKne3meq5aSn9XLyUdCD', label: 'Charlie - Australian Male (Young)', gender: 'male', accent: 'Australian' },
-    // Neutral voices
-    { value: 'SAz9YHcvj6GT2YYXdXww', label: 'River - American Neutral (Middle-aged)', gender: 'neutral', accent: 'American' },
-    // Indian Hindi voices
-    { value: 'broqrJkktxd1CclKTudW', label: 'Anika - Hindi Customer Care Agent (Female)', gender: 'female', accent: 'Indian' },
-    { value: 'ni6cdqyS9wBvic5LPA7M', label: 'Tara - Hindi Conversational (Female)', gender: 'female', accent: 'Indian' },
-    { value: 'SZfY4K69FwXus87eayHK', label: 'Nikita - Hindi Youthful (Female)', gender: 'female', accent: 'Indian' },
-    { value: '1qEiC6qsybMkmnNdVMbK', label: 'Monika - Hindi Modulated (Female)', gender: 'female', accent: 'Indian' },
-    { value: 'KSsyodh37PbfWy29kPtx', label: 'Kishan - Hindi Narrator (Male)', gender: 'male', accent: 'Indian' },
-    { value: '6MoEUz34rbRrmmyxgRm4', label: 'Manav - Hindi Conversational (Male)', gender: 'male', accent: 'Indian' },
+  sarvam: [
+    // ── bulbul:v2 (the safe default model) ──────────────────────────────
+    // Female
+    { value: 'anushka', label: 'Anushka — Female (bulbul:v2, default)', gender: 'female', accent: 'Indian', model: 'bulbul:v2' },
+    { value: 'manisha', label: 'Manisha — Female (bulbul:v2)', gender: 'female', accent: 'Indian', model: 'bulbul:v2' },
+    { value: 'vidya', label: 'Vidya — Female (bulbul:v2)', gender: 'female', accent: 'Indian', model: 'bulbul:v2' },
+    { value: 'arya', label: 'Arya — Female (bulbul:v2)', gender: 'female', accent: 'Indian', model: 'bulbul:v2' },
+    // Male
+    { value: 'abhilash', label: 'Abhilash — Male (bulbul:v2)', gender: 'male', accent: 'Indian', model: 'bulbul:v2' },
+    { value: 'karun', label: 'Karun — Male (bulbul:v2)', gender: 'male', accent: 'Indian', model: 'bulbul:v2' },
+    { value: 'hitesh', label: 'Hitesh — Male (bulbul:v2)', gender: 'male', accent: 'Indian', model: 'bulbul:v2' },
+
+    // ── bulbul:v3 / v3-beta (opt-in only — server rejects plugin defaults) ──
+    // Customer-care + conversational voices unique to v3.
+    { value: 'shubh', label: 'Shubh — Male (bulbul:v3, customer care)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'aditya', label: 'Aditya — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'rahul', label: 'Rahul — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'rohan', label: 'Rohan — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'amit', label: 'Amit — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'dev', label: 'Dev — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'ratan', label: 'Ratan — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'varun', label: 'Varun — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'manan', label: 'Manan — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'sumit', label: 'Sumit — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'kabir', label: 'Kabir — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'aayan', label: 'Aayan — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'ashutosh', label: 'Ashutosh — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'advait', label: 'Advait — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'anand', label: 'Anand — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'tarun', label: 'Tarun — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'sunny', label: 'Sunny — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'mani', label: 'Mani — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'gokul', label: 'Gokul — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'vijay', label: 'Vijay — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'mohit', label: 'Mohit — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'rehan', label: 'Rehan — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'soham', label: 'Soham — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    // Female (v3)
+    { value: 'ritu', label: 'Ritu — Female (bulbul:v3)', gender: 'female', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'priya', label: 'Priya — Female (bulbul:v3)', gender: 'female', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'neha', label: 'Neha — Female (bulbul:v3)', gender: 'female', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'pooja', label: 'Pooja — Female (bulbul:v3)', gender: 'female', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'simran', label: 'Simran — Female (bulbul:v3)', gender: 'female', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'kavya', label: 'Kavya — Female (bulbul:v3)', gender: 'female', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'ishita', label: 'Ishita — Female (bulbul:v3)', gender: 'female', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'shreya', label: 'Shreya — Female (bulbul:v3)', gender: 'female', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'roopa', label: 'Roopa — Female (bulbul:v3)', gender: 'female', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'tanya', label: 'Tanya — Female (bulbul:v3)', gender: 'female', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'shruti', label: 'Shruti — Female (bulbul:v3)', gender: 'female', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'suhani', label: 'Suhani — Female (bulbul:v3)', gender: 'female', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'kavitha', label: 'Kavitha — Female (bulbul:v3)', gender: 'female', accent: 'Indian', model: 'bulbul:v3' },
+    { value: 'rupali', label: 'Rupali — Female (bulbul:v3)', gender: 'female', accent: 'Indian', model: 'bulbul:v3' },
   ],
 };
 
-// ASR models — Deepgram only
+// ASR models — Sarvam (ASR migration 2026-05-28). saaras:v3 is the flagship
+// streaming Indic ASR — 22 languages, native code-switching, mode=transcribe
+// keeps source language. saarika:v2.5 covers 11 languages and is slightly
+// cheaper. saaras:v2.5 is translate-only (forces English output) — listed for
+// explicit use cases like "Hindi audio → English transcript for reporting"
+// but NOT recommended for voice agents (LLM/TTS need source-language input).
 export const ENHANCED_ASR_MODELS = {
-  deepgram: [
-    { value: 'nova-2', label: 'Nova-2 (Latest, Most Accurate)', cost: 0.0043, latency: 75, costPerMin: 0.0043 },
-    { value: 'nova-3', label: 'Nova-3 (Beta, Improved)', cost: 0.0059, latency: 80, costPerMin: 0.0059 },
+  sarvam: [
+    { value: 'saaras:v3', label: 'Saaras v3 — Default (22 langs, transcribe, streaming)', cost: 0.005, latency: 400, costPerMin: 0.005 },
+    { value: 'saarika:v2.5', label: 'Saarika v2.5 (11 langs, cheaper, streaming)', cost: 0.003, latency: 350, costPerMin: 0.003 },
+    { value: 'saaras:v2.5', label: 'Saaras v2.5 — Translate-only (output in English, not for voice agents)', cost: 0.005, latency: 400, costPerMin: 0.005 },
   ],
 };
 
-// TTS models — ElevenLabs only
+// Sarvam ASR languages (BCP-47 India-locale + auto-detect).
+export const SARVAM_ASR_LANGUAGES = [
+  { value: 'en-IN', label: 'English (India) — default' },
+  { value: 'unknown', label: 'Auto-detect (multilingual / code-switching)' },
+  { value: 'hi-IN', label: 'Hindi' },
+  { value: 'bn-IN', label: 'Bengali' },
+  { value: 'gu-IN', label: 'Gujarati' },
+  { value: 'kn-IN', label: 'Kannada' },
+  { value: 'ml-IN', label: 'Malayalam' },
+  { value: 'mr-IN', label: 'Marathi' },
+  { value: 'od-IN', label: 'Odia' },
+  { value: 'pa-IN', label: 'Punjabi' },
+  { value: 'ta-IN', label: 'Tamil' },
+  { value: 'te-IN', label: 'Telugu' },
+  // saaras:v3-only (extended Indic set)
+  { value: 'as-IN', label: 'Assamese (saaras:v3 only)' },
+  { value: 'ur-IN', label: 'Urdu (saaras:v3 only)' },
+  { value: 'ne-IN', label: 'Nepali (saaras:v3 only)' },
+];
+
+// TTS models — Sarvam Bulbul. v3 is the default (streaming-capable, 30 voices,
+// flagship). v2 stays available for assistants that need v2-only voices
+// (anushka, manisha, vidya, arya, abhilash, karun, hitesh) — those voices do
+// NOT work on v3, the backend coercion downgrades the speaker to v2's default
+// "anushka" if the model is forced back to v2.
 export const ENHANCED_TTS_MODELS = {
-  elevenlabs: [
-    // Flash Models - Ultra Low Latency (~75ms) - Best for Real-time/Voice Agents
-    { value: 'eleven_flash_v2_5', label: 'Flash V2.5 - Ultra Fast (~75ms, 32 Languages)', cost: 0.09, latency: 75, costPerChar: 0.00009 },
-    { value: 'eleven_flash_v2', label: 'Flash V2 - Ultra Fast (~75ms, English Only)', cost: 0.09, latency: 75, costPerChar: 0.00009 },
-    // Turbo Models - Low Latency with Better Quality
-    { value: 'eleven_turbo_v2_5', label: 'Turbo V2.5 - Fast & High Quality (32 Languages)', cost: 0.09, latency: 130, costPerChar: 0.00009 },
-    { value: 'eleven_turbo_v2', label: 'Turbo V2 - Fast & High Quality (English Only)', cost: 0.09, latency: 150, costPerChar: 0.00009 },
-    // Standard Models - Best Quality
-    { value: 'eleven_multilingual_v2', label: 'Multilingual V2 - Best Quality (29 Languages)', cost: 0.18, latency: 180, costPerChar: 0.00018 },
-    // Eleven V3 - Most Expressive
-    { value: 'eleven_v3', label: 'Eleven V3 - Most Expressive (70+ Languages, Higher Latency)', cost: 0.18, latency: 300, costPerChar: 0.00018 },
+  sarvam: [
+    { value: 'bulbul:v3', label: 'Bulbul v3 — Default (30 voices, streaming, customer-care + conversational)', cost: 0.15, latency: 250, costPerChar: 0.00015 },
+    { value: 'bulbul:v3-beta', label: 'Bulbul v3-beta (25 voices)', cost: 0.15, latency: 250, costPerChar: 0.00015 },
+    { value: 'bulbul:v2', label: 'Bulbul v2 — Legacy (7 voices incl. anushka — opt-in if you need those voices)', cost: 0.12, latency: 200, costPerChar: 0.00012 },
   ],
 };
 
-// LLM models — OpenAI only
+// Supported TTS languages (BCP-47, India-locale). Bulbul's 11-language set.
+export const SARVAM_TTS_LANGUAGES = [
+  { value: 'en-IN', label: 'English (India) — default' },
+  { value: 'hi-IN', label: 'Hindi' },
+  { value: 'bn-IN', label: 'Bengali' },
+  { value: 'gu-IN', label: 'Gujarati' },
+  { value: 'kn-IN', label: 'Kannada' },
+  { value: 'ml-IN', label: 'Malayalam' },
+  { value: 'mr-IN', label: 'Marathi' },
+  { value: 'od-IN', label: 'Odia' },
+  { value: 'pa-IN', label: 'Punjabi' },
+  { value: 'ta-IN', label: 'Tamil' },
+  { value: 'te-IN', label: 'Telugu' },
+];
+
+// LLM models — Sarvam (LLM migration 2026-05-23). sarvam-105b is the flagship
+// (105B-param Indic-tuned MoE); sarvam-m is the lighter/faster alternative.
+// Cost figures are approximate and used by the cost calculator only.
+//
+// IMPORTANT: sarvam-105b runs in "thinking" mode by default. The backend
+// injects "/nothink" at the start of every system prompt to disable this and
+// keep TTFT under ~3s. Do NOT remove /nothink without re-benchmarking.
 export const ENHANCED_LLM_MODELS = {
-  openai: [
-    { value: 'gpt-4o-mini', label: 'GPT-4O Mini - Cheapest & Fastest ($0.15 in / $0.60 out per 1M tokens)', costInput: 0.15, costOutput: 0.60, latency: 400, cost: '0.000375', speed: 'Fastest' },
-    { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo - Very Fast ($0.50 in / $1.50 out per 1M tokens)', costInput: 0.50, costOutput: 1.50, latency: 300, cost: '0.001', speed: 'Very Fast' },
-    { value: 'gpt-4o', label: 'GPT-4O - Balanced Performance ($5.00 in / $20.00 out per 1M tokens)', costInput: 5.00, costOutput: 20.00, latency: 800, cost: '0.0125', speed: 'Fast' },
-    { value: 'gpt-4-turbo', label: 'GPT-4 Turbo - High Quality ($10.00 in / $30.00 out per 1M tokens)', costInput: 10.00, costOutput: 30.00, latency: 1000, cost: '0.02', speed: 'Moderate' },
-    { value: 'o1-mini', label: 'O1 Mini - Advanced Reasoning ($3.00 in / $12.00 out per 1M tokens)', costInput: 3.00, costOutput: 12.00, latency: 1200, cost: '0.0075', speed: 'Advanced Reasoning' },
+  sarvam: [
+    { value: 'sarvam-105b', label: 'Sarvam-105b — Flagship (default, Indic-tuned, /nothink mode)', costInput: 0.30, costOutput: 1.20, latency: 700, cost: '0.0008', speed: 'Fast' },
+    { value: 'sarvam-m', label: 'Sarvam-M — Lighter & Faster (24B, lower cost)', costInput: 0.10, costOutput: 0.40, latency: 400, cost: '0.0003', speed: 'Very Fast' },
+    { value: 'sarvam-30b', label: 'Sarvam-30b — Mid-tier', costInput: 0.15, costOutput: 0.60, latency: 500, cost: '0.0004', speed: 'Fast' },
   ],
 };
 
-// Twilio Cost (for outbound SIP telephony through LiveKit)
+// Twilio Cost (for outbound SIP telephony through LiveKit). Pre-Vobiz migration.
 export const TWILIO_COST_PER_MIN = {
   usd: 0.014,
   inr: 5.5,
 };
 
-// Fetch ElevenLabs voices dynamically from the user's account.
-export async function fetchElevenLabsVoices(
-  userId: string
-): Promise<Array<{ value: string; label: string; gender: string; accent: string }>> {
-  try {
-    const response = await fetch(
-      `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/voices/elevenlabs/sync?user_id=${userId}`
-    );
-    if (!response.ok) {
-      console.warn('Failed to fetch ElevenLabs voices, using defaults');
-      return ENHANCED_TTS_VOICES.elevenlabs;
-    }
-    const data = await response.json();
-    if (data.success && data.voices) {
-      return data.voices.map(
-        (voice: { id: string; name: string; accent: string; gender: string; age_group?: string }) => ({
-          value: voice.id,
-          label: `${voice.name} - ${voice.accent} ${voice.gender.charAt(0).toUpperCase() + voice.gender.slice(1)}${
-            voice.age_group ? ` (${voice.age_group})` : ''
-          }`,
-          gender: voice.gender,
-          accent: voice.accent,
-        })
-      );
-    }
-    return ENHANCED_TTS_VOICES.elevenlabs;
-  } catch (error) {
-    console.error('Error fetching ElevenLabs voices:', error);
-    return ENHANCED_TTS_VOICES.elevenlabs;
-  }
-}
-
-// Get all TTS voices, optionally with a live ElevenLabs sync.
+// Static voice list for Sarvam — no per-user account sync needed (the speaker
+// set is fixed across all Sarvam API keys, unlike ElevenLabs' per-account voice
+// libraries). Kept as an async function with the same signature as the old
+// ElevenLabs fetcher so the assistant-edit form's calling code doesn't need
+// changes.
 export async function getTTSVoices(
-  userId?: string,
-  syncElevenLabs: boolean = false
+  _userId?: string,
+  _syncRemote: boolean = false
 ): Promise<typeof ENHANCED_TTS_VOICES> {
-  if (!syncElevenLabs || !userId) return ENHANCED_TTS_VOICES;
-  const live = await fetchElevenLabsVoices(userId);
-  return { ...ENHANCED_TTS_VOICES, elevenlabs: live };
+  return ENHANCED_TTS_VOICES;
 }

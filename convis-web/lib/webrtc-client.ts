@@ -322,7 +322,21 @@ export function useWebRTCCall(config: {
           ];
         });
       },
-      onError: (err) => console.error("[LiveKit Hook] Error:", err.message),
+      onError: (err) => {
+        // "Client initiated disconnect" is NOT an error — it's how the
+        // LiveKit client reports that WE called room.disconnect() (which
+        // happens on every normal stop() / unmount). React 18 StrictMode
+        // in dev fires the BrowserCallModal's useEffect cleanup once on
+        // the discarded first mount, which triggers this. Demote it to
+        // a debug log so the console doesn't show a scary red error on
+        // every page open.
+        const msg = err?.message || "";
+        if (msg === "Client initiated disconnect") {
+          console.debug("[LiveKit Hook] client-initiated disconnect (expected)");
+          return;
+        }
+        console.error("[LiveKit Hook] Error:", msg);
+      },
     });
 
     clientRef.current = client;
