@@ -16,7 +16,6 @@ on:
   push:
     branches:
       - main
-      - Tejas-feature-branch
   workflow_dispatch:
 
 # OIDC requires id-token: write permission. contents: read is the default.
