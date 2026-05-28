@@ -309,15 +309,12 @@ async def startup_event():
         except Exception as e:
             logger.warning(f"⚠️ Campaign scheduler failed to start: {e}")
 
-        # 5. Start LLM cache warmer (keeps OpenAI prompt cache hot 24/7).
-        # Without this, sporadic traffic > 5 min apart pays full prompt-
-        # processing latency on the first user turn of each cold call.
-        try:
-            from app.services.llm_cache_warmer import cache_warmer_loop
-            asyncio.create_task(cache_warmer_loop())
-            logger.info("✅ LLM cache warmer started")
-        except Exception as e:
-            logger.warning(f"⚠️ LLM cache warmer failed to start: {e}")
+        # 5. LLM cache warmer removed — Sarvam-105b has no equivalent of
+        # OpenAI's prompt_cache_key, so the background loop that used to fire
+        # 1-token completions to keep the cache hot is dead code. First-turn
+        # TTFT pays the full prompt-processing cost (~1.5-3s) on every cold
+        # call. See llm_cache_warmer.py (kept on disk for reference until the
+        # next sweep) and the dead-code note in agent_worker.py.
 
         # 6. Start post-call summary backfill loop (P1 conversation-memory
         # feature). Catches orphans where the webhook fire-and-forget

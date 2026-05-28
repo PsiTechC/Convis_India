@@ -94,13 +94,33 @@ export default function BrowserCallModal({
 
   // Auto-start call on mount, auto-stop on unmount.
   // The component returns null when !isOpen, so mount ≡ modal opened, unmount ≡ modal closed.
-  // start/stop are stable refs (never change), so this effect fires exactly once.
+  //
+  // React 18 / Next.js dev mode wraps every useEffect in StrictMode → the
+  // effect fires TWICE on mount (mount → cleanup → mount) so async side
+  // effects without a cancel-on-cleanup guard run twice. Before this fix,
+  // start() was called both times: each call POST /api/livekit/token, which
+  // creates a NEW LiveKit room with its OWN dispatched agent. The browser
+  // then connected to BOTH rooms, both agents played their greeting, and
+  // the user heard a double / echo.
+  //
+  // Fix: defer start() by one microtask via setTimeout(_, 0). The cleanup
+  // from StrictMode's discarded first mount runs BEFORE the setTimeout
+  // fires, so we can flip `cancelled=true` and clearTimeout to drop that
+  // start. The real (second / permanent) mount schedules a fresh start
+  // that actually runs. In production (no StrictMode) only one mount
+  // happens, the setTimeout fires once, behaviour is unchanged.
   useEffect(() => {
-    start().catch((err) => {
-      console.error("[BrowserCallModal] Failed to start:", err);
-    });
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      start().catch((err) => {
+        console.error("[BrowserCallModal] Failed to start:", err);
+      });
+    }, 0);
 
     return () => {
+      cancelled = true;
+      clearTimeout(timer);
       stop().catch(console.error);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

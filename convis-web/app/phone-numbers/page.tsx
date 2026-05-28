@@ -250,25 +250,28 @@ function PhoneNumbersPageContent() {
   // Ref for call status interval cleanup
   const callStatusIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Vobiz first (default for Convis-India post-migration). Twilio kept
+  // available for users who already have Twilio numbers but is no longer
+  // the recommended path.
   const serviceProviders: ServiceProvider[] = [
     {
+      id: 'vobiz',
+      name: 'Vobiz (Recommended)',
+      // Plain "V" mark — no external SVG dependency.
+      logo: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIyNCIgY3k9IjI0IiByPSIyMCIgZmlsbD0id2hpdGUiLz48dGV4dCB4PSI1MCUiIHk9IjU4JSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IkFyaWFsLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjI0IiBmb250LXdlaWdodD0iYm9sZCIgZmlsbD0iIzdDM0FFRCI+VjwvdGV4dD48L3N2Zz4=',
+      description: 'Direct SIP trunk via LiveKit — cheaper for India / Asia-Pac. No Twilio middle-leg.',
+      authUrl: '',
+      color: 'from-purple-500 to-purple-600',
+      features: ['Voice', 'India', 'SIP Trunk', 'Lower cost']
+    },
+    {
       id: 'twilio',
-      name: 'Twilio',
+      name: 'Twilio (Legacy)',
       logo: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIyNCIgY3k9IjI0IiByPSIyMCIgZmlsbD0id2hpdGUiLz48Y2lyY2xlIGN4PSIxNyIgY3k9IjE3IiByPSI0IiBmaWxsPSIjRjIyRjQ2Ii8+PGNpcmNsZSBjeD0iMzEiIGN5PSIxNyIgcj0iNCIgZmlsbD0iI0YyMkY0NiIvPjxjaXJjbGUgY3g9IjE3IiBjeT0iMzEiIHI9IjQiIGZpbGw9IiNGMjJGNDYiLz48Y2lyY2xlIGN4PSIzMSIgY3k9IjMxIiByPSI0IiBmaWxsPSIjRjIyRjQ2Ii8+PC9zdmc+',
-      description: 'Industry-leading communications platform with global reach',
+      description: 'Available for users who already have Twilio numbers. Vobiz is recommended for new numbers.',
       authUrl: '',
       color: 'from-red-500 to-red-600',
       features: ['Voice', 'SMS', 'WhatsApp', 'Video']
-    },
-    {
-      id: 'vobiz',
-      name: 'Vobiz',
-      // Plain "V" mark — no external SVG dependency.
-      logo: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIyNCIgY3k9IjI0IiByPSIyMCIgZmlsbD0id2hpdGUiLz48dGV4dCB4PSI1MCUiIHk9IjU4JSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IkFyaWFsLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjI0IiBmb250LXdlaWdodD0iYm9sZCIgZmlsbD0iIzdDM0FFRCI+VjwvdGV4dD48L3N2Zz4=',
-      description: 'Direct SIP trunk — cheaper for India / Asia-Pac calls',
-      authUrl: '',
-      color: 'from-purple-500 to-purple-600',
-      features: ['Voice', 'India', 'SIP Trunk']
     }
   ];
 
@@ -1915,7 +1918,12 @@ function PhoneNumbersPageContent() {
                             setSelectedPhoneForCall(phone);
                             setCallToNumber('');
                             setIsCallModalOpen(true);
-                            fetchVerifiedCallerIds();
+                            // Twilio-only — Vobiz has no "verified caller IDs"
+                            // concept and the endpoint 404s. Skip the fetch so
+                            // the modal opens cleanly to the free-text input.
+                            if ((phone.provider || '').toLowerCase() !== 'vobiz') {
+                              fetchVerifiedCallerIds();
+                            }
                           }}
                           className={`flex-1 px-4 py-2.5 rounded-xl ${isDarkMode ? 'bg-green-600 hover:bg-green-700 text-white' : 'bg-green-500 hover:bg-green-600 text-white'} transition-colors text-sm font-semibold flex items-center justify-center gap-2 shadow-lg shadow-green-500/25`}
                         >
@@ -4034,7 +4042,31 @@ function PhoneNumbersPageContent() {
                 </div>
               </div>
 
-              {/* Verified Caller IDs List */}
+              {/* Destination input — Vobiz uses free-text (any E.164 number),
+                  Twilio uses the legacy "verified caller IDs" picker because
+                  Twilio's outbound rules require destination verification on
+                  trial accounts. Branch on the source number's provider. */}
+              {(selectedPhoneForCall.provider || '').toLowerCase() === 'vobiz' ? (
+                <div className="mb-6">
+                  <label className={`block text-sm font-semibold mb-3 ${isDarkMode ? 'text-white' : 'text-neutral-dark'}`}>
+                    Number to Call (E.164)
+                  </label>
+                  <input
+                    type="tel"
+                    value={callToNumber}
+                    onChange={(e) => setCallToNumber(e.target.value)}
+                    placeholder="+919284285734"
+                    className={`w-full px-4 py-3 rounded-xl border ${
+                      isDarkMode
+                        ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400'
+                        : 'bg-white border-neutral-mid/20 text-neutral-dark'
+                    } focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary text-sm font-mono`}
+                  />
+                  <p className={`mt-2 text-xs ${isDarkMode ? 'text-gray-400' : 'text-neutral-mid'}`}>
+                    Vobiz dials this number through your LiveKit SIP trunk. No caller-ID verification needed.
+                  </p>
+                </div>
+              ) : (
               <div className="mb-6">
                 <label className={`block text-sm font-semibold mb-3 ${isDarkMode ? 'text-white' : 'text-neutral-dark'}`}>
                   Select Verified Number to Call
@@ -4099,6 +4131,7 @@ function PhoneNumbersPageContent() {
                   </div>
                 )}
               </div>
+              )}
 
               {/* Info Box */}
               <div className={`p-4 rounded-xl ${isDarkMode ? 'bg-green-900/20 border border-green-800' : 'bg-green-50 border border-green-200'}`}>

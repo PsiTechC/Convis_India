@@ -75,12 +75,11 @@ services:
       - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
       - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
 
-      # OpenAI
+      # Sarvam — full voice stack (Saaras v3 ASR + Sarvam-105b LLM + Bulbul v3 TTS)
+      - SARVAM_API_KEY=${SARVAM_API_KEY}
+      # OpenAI — still used by post-call summaries, RAG embeddings, and the
+      # legacy realtime_tool_service. Voice paths are fully Sarvam.
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-
-      # Deepgram (ASR) + ElevenLabs (TTS) — used by the LiveKit agent worker
-      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
-      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
 
       # LiveKit Cloud — media plane for all voice calls (browser + PSTN)
       - LIVEKIT_URL=${LIVEKIT_URL}

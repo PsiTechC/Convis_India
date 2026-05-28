@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:docs.sarvam.ai)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(dir /B \"c:\\\\Users\\\\Tejas-Psitech\\\\Desktop\\\\Psitech\\\\Convis_India\")",
+      "Bash(findstr /I sarvam)",
+      "Read(//c/tmp/**)",
+      "Bash(pip download *)",
+      "Read(//tmp/**)",
+      "Bash(python -c \"import zipfile; z = zipfile.ZipFile\\('livekit_plugins_sarvam-1.5.12-py3-none-any.whl'\\); z.extractall\\('extracted'\\); print\\('\\\\n'.join\\(sorted\\(z.namelist\\(\\)\\)\\)\\)\")"
+    ]
+  }
+}

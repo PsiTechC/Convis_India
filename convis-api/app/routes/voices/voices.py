@@ -33,8 +33,17 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 logger = logging.getLogger(__name__)
 
 
+def _resolve_sarvam_key() -> Optional[str]:
+    """Sarvam uses a single account-level key (no per-user keys). Falls back
+    to the SARVAM_API_KEY env var so local dev / VPS deploys without the
+    settings module reading the key still work."""
+    return getattr(settings, "sarvam_api_key", None) or os.environ.get("SARVAM_API_KEY")
+
+
 def _resolve_cartesia_key() -> Optional[str]:
-    """Cartesia uses a single account-level key (no per-user keys yet)."""
+    """Cartesia uses a single account-level key (no per-user keys yet).
+    Legacy — kept for the /list endpoint which still references Cartesia.
+    The /demo endpoint no longer routes here for new previews."""
     return getattr(settings, "cartesia_api_key", None) or os.environ.get("CARTESIA_API_KEY")
 
 
@@ -399,6 +408,143 @@ async def remove_voice_from_preferences(user_id: str, request: RemoveVoiceReques
     return {"success": True}
 
 
+async def _generate_sarvam_demo(
+    speaker: str,
+    model: str,
+    text: str,
+    language: str,
+    api_key: str,
+) -> bytes:
+    """Synthesize a short demo via Sarvam's synchronous TTS REST endpoint.
+
+    The endpoint returns a JSON body with a base64-encoded audio string in
+    `audios[0]` (Sarvam can return multiple chunks for long input; the
+    dashboard preview is always one short sentence so we just take the
+    first). We decode and return raw bytes.
+
+    Endpoint: POST https://api.sarvam.ai/text-to-speech
+    Auth:     api-subscription-key header (NOT Bearer)
+
+    Field-name note: Sarvam previously accepted `inputs: [text]` (legacy)
+    OR `text: <string>` but the current REST API HARD-REJECTS sending both
+    with 400 ("Only one of 'text' or 'inputs' should be provided"). Stick
+    to `text` only.
+
+    Language coercion: Sarvam REST requires the BCP-47 India-locale form
+    ("en-IN", "hi-IN"). Bare short codes from older frontends ("en", "hi")
+    are upgraded here so the preview button keeps working across UI versions.
+
+    Error surface: the full raw response body is logged AND included in the
+    HTTPException detail so we can diagnose Sarvam-side rejections from the
+    server logs without re-running the request.
+    """
+    import base64
+    # Upgrade short language codes ("en" → "en-IN") so Sarvam doesn't 400
+    # on a still-in-flight frontend that sends the legacy short form.
+    if language and "-" not in language:
+        language = f"{language.lower()}-IN"
+    if not language:
+        language = "en-IN"
+
+    # Auto-downgrade model to bulbul:v2 if the speaker is v2-only. Sarvam's
+    # REST endpoint hard-rejects v2-only speakers against bulbul:v3 with 400
+    # ("speaker not in available list"). The dashboard's voice picker is
+    # supposed to filter v2 voices out when v3 is selected, but the preview
+    # button is reachable from edit forms where stored docs may still
+    # reference v2 voices like 'anushka' / 'manisha'. Quietly serving v2 here
+    # gives the user a working preview without forcing them to switch models
+    # first.
+    _v2_only_speakers = {
+        "anushka", "manisha", "vidya", "arya",
+        "abhilash", "karun", "hitesh",
+    }
+    effective_model = model or "bulbul:v3"
+    if speaker in _v2_only_speakers and effective_model != "bulbul:v2":
+        logger.info(
+            "[VOICES] Auto-downgrading model %r → 'bulbul:v2' for v2-only speaker %r",
+            effective_model, speaker,
+        )
+        effective_model = "bulbul:v2"
+
+    payload: Dict[str, Any] = {
+        "text": text,
+        "target_language_code": language,
+        "model": effective_model,
+        "speaker": speaker,
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.sarvam.ai/text-to-speech",
+                headers={
+                    "api-subscription-key": api_key,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=30.0,
+            )
+            if response.status_code != 200:
+                # Capture the FULL response body for diagnosis. Sarvam's error
+                # shape varies — sometimes {"error": {"message": ...}},
+                # sometimes {"detail": ...}, sometimes a bare {"message": ...},
+                # sometimes a string. We log the raw text and surface whatever
+                # we can parse.
+                raw_body = response.text or ""
+                logger.error(
+                    "Sarvam TTS demo failed: status=%s body=%s payload=%s",
+                    response.status_code, raw_body[:1000], {
+                        "speaker": speaker, "model": payload["model"],
+                        "language": language, "text_len": len(text),
+                    },
+                )
+                parsed_msg = ""
+                try:
+                    js = response.json()
+                    if isinstance(js, dict):
+                        # Try the common error-shape keys in order.
+                        err = js.get("error")
+                        if isinstance(err, dict):
+                            parsed_msg = err.get("message") or err.get("code") or ""
+                        elif isinstance(err, str):
+                            parsed_msg = err
+                        parsed_msg = parsed_msg or js.get("detail") or js.get("message") or ""
+                except Exception:
+                    pass
+                detail = (
+                    f"Sarvam {response.status_code}: "
+                    f"{parsed_msg or raw_body[:300] or 'unknown error'}"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=detail,
+                )
+            try:
+                data = response.json()
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Sarvam returned non-JSON body: {response.text[:200]}",
+                ) from exc
+            audios = data.get("audios") or []
+            if not audios:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Sarvam response missing `audios`: {str(data)[:200]}",
+                )
+            try:
+                return base64.b64decode(audios[0])
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Sarvam audio not base64-decodable: {exc}",
+                ) from exc
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Sarvam API timeout. Please try again.",
+        )
+
+
 async def _generate_elevenlabs_demo(voice_id: str, model: str, text: str, api_key: str) -> bytes:
     try:
         async with httpx.AsyncClient() as client:
@@ -480,19 +626,55 @@ async def _generate_cartesia_demo(voice_id: str, model: str, text: str, api_key:
 
 @router.post("/demo", status_code=status.HTTP_200_OK)
 async def generate_universal_voice_demo(request: UniversalVoiceDemoRequest):
-    """Generate a TTS preview for either ElevenLabs OR Cartesia.
+    """Generate a TTS preview.
+
+    Default provider is `sarvam` (post-2026-05 voice migration). The
+    ElevenLabs / Cartesia branches are kept temporarily so any in-flight
+    frontend code that still sends the old provider names doesn't 500 —
+    they should be removed once the dashboard is fully migrated.
 
     Per-provider:
-    - elevenlabs: uses the user's ElevenLabs key (or env fallback) → MP3
-    - cartesia: uses the account-level Cartesia key → WAV (PCM 22.05 kHz)
+    - sarvam:     account-level SARVAM_API_KEY → MP3 (Sarvam synchronous TTS,
+                  returns base64-encoded audio that we decode and stream back)
+    - elevenlabs: deprecated — uses the user's ElevenLabs key → MP3
+    - cartesia:   deprecated — uses the account-level Cartesia key → WAV
     """
-    provider = (request.provider or "elevenlabs").lower()
+    provider = (request.provider or "sarvam").lower()
     try:
         ObjectId(request.user_id)
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid user_id format",
+        )
+
+    if provider == "sarvam":
+        api_key = _resolve_sarvam_key()
+        if not api_key:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No Sarvam API key configured. Set SARVAM_API_KEY env.",
+            )
+        # `voice_id` in the request schema carries the Sarvam speaker name
+        # (e.g. "shubh", "anushka") — kept under the existing field name so the
+        # frontend doesn't need a payload-shape change.
+        # `model` defaults to bulbul:v3; the request may override.
+        # `language` (Sarvam-only) is read from extra payload if present,
+        # otherwise defaults to en-IN.
+        language = getattr(request, "language", None) or "en-IN"
+        audio_content = await _generate_sarvam_demo(
+            speaker=request.voice_id,
+            model=request.model or "bulbul:v3",
+            text=request.text,
+            language=language,
+            api_key=api_key,
+        )
+        return Response(
+            content=audio_content,
+            media_type="audio/mpeg",
+            headers={
+                "Content-Disposition": f'inline; filename="voice_demo_sarvam_{request.voice_id}.mp3"'
+            },
         )
 
     if provider == "cartesia":

@@ -14,7 +14,7 @@ class AIAssistantCreate(BaseModel):
     user_id: str
     name: str
     system_message: str
-    voice: str = "alloy"
+    voice: str = "shubh"
     # 0.4 is the sweet spot for inquiry/info voice bots: consistent enough
     # that the same question gets a similar answer call-to-call (helps prompt
     # caching too), still enough variation to sound natural. 0.7+ produces
@@ -28,22 +28,22 @@ class AIAssistantCreate(BaseModel):
     calendar_account_ids: Optional[List[str]] = []  # Multiple calendar accounts for availability checking and scheduling
     calendar_enabled: Optional[bool] = False  # Enable calendar functionality
 
-    # Voice Mode — always custom (Deepgram + OpenAI + ElevenLabs)
+    # Voice Mode — always custom (Deepgram + Sarvam LLM + Sarvam Bulbul TTS)
     voice_mode: Optional[str] = "custom"
 
-    # Provider selection — hardcoded defaults
+    # Provider selection — Convis-India Sarvam stack defaults.
     asr_provider: Optional[str] = "deepgram"
-    tts_provider: Optional[str] = "elevenlabs"
+    tts_provider: Optional[str] = "sarvam"
 
     # ASR Configuration
     asr_language: Optional[str] = "en"
-    asr_model: Optional[str] = "nova-2"
+    asr_model: Optional[str] = "nova-2-phonecall"
     asr_keywords: Optional[List[str]] = []
 
     # TTS Configuration
-    tts_model: Optional[str] = "eleven_flash_v2_5"
+    tts_model: Optional[str] = "bulbul:v3"
     tts_speed: Optional[float] = Field(default=1.0, ge=0.25, le=4.0)
-    tts_voice: Optional[str] = "alloy"
+    tts_voice: Optional[str] = "shubh"
     # Cartesia-only knobs (ignored when tts_provider != "cartesia"). Validated /
     # whitelisted server-side by assistant_config._coerce_tts_emotion /
     # _coerce_tts_language — keep these permissive at the schema layer so the
@@ -76,12 +76,13 @@ class AIAssistantCreate(BaseModel):
     # Buffer & Latency Settings
     audio_buffer_size: Optional[int] = Field(default=200, ge=50, le=1000)  # Audio buffer size in ms
 
-    # LLM Configuration. Defaults match the locked Convis stack:
-    #   gpt-4o-mini: 3-5x faster than gpt-4-turbo + supports prompt caching
-    #     (gpt-4-turbo does NOT cache — every turn pays cold-start ~3-4s LLM TTFT)
-    #   max_tokens=250: ~70s of speech, prevents mid-sentence cutoffs
-    llm_provider: Optional[str] = "openai"
-    llm_model: Optional[str] = "gpt-4o-mini"
+    # LLM Configuration — Convis-India Sarvam stack defaults.
+    #   sarvam-105b: flagship Indic-tuned MoE; agent injects "/nothink" at the
+    #     start of the system prompt to disable reasoning and keep TTFT
+    #     under ~3s. Don't remove /nothink without re-benchmarking.
+    #   max_tokens=250: ~70s of speech, prevents mid-sentence cutoffs.
+    llm_provider: Optional[str] = "sarvam"
+    llm_model: Optional[str] = "sarvam-105b"
     llm_max_tokens: Optional[int] = Field(default=250, ge=50, le=4000)
 
     # Language Configuration
@@ -337,19 +338,19 @@ class AIAssistantResponse(BaseModel):
     # Voice Mode — always custom
     voice_mode: str = "custom"
 
-    # Provider selection — hardcoded
+    # Provider selection — Convis-India Sarvam stack.
     asr_provider: str = "deepgram"
-    tts_provider: str = "elevenlabs"
+    tts_provider: str = "sarvam"
 
     # ASR Configuration
     asr_language: str = "en"
-    asr_model: Optional[str] = "nova-2"
+    asr_model: Optional[str] = "nova-2-phonecall"
     asr_keywords: List[str] = []
 
     # TTS Configuration
-    tts_model: Optional[str] = "eleven_flash_v2_5"
+    tts_model: Optional[str] = "bulbul:v3"
     tts_speed: float = 1.0
-    tts_voice: Optional[str] = "alloy"
+    tts_voice: Optional[str] = "shubh"
     # Cartesia-only knobs (ignored on ElevenLabs assistants) — see AIAssistantCreate.
     tts_language: str = "en"
     tts_emotion: List[str] = []
@@ -370,8 +371,8 @@ class AIAssistantResponse(BaseModel):
     audio_buffer_size: int = 200
 
     # LLM Configuration — see AIAssistantCreate for rationale on the defaults
-    llm_provider: str = "openai"
-    llm_model: Optional[str] = "gpt-4o-mini"
+    llm_provider: str = "sarvam"
+    llm_model: Optional[str] = "sarvam-105b"
     llm_max_tokens: int = 250
 
     # Language Configuration
