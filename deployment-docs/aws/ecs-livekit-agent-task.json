@@ -19,21 +19,22 @@
       "essential": true,
       "environment": [
         { "name": "ENVIRONMENT", "value": "production" },
-        { "name": "DATABASE_NAME", "value": "convis_python" },
+        { "name": "DATABASE_NAME", "value": "convis_india" },
         { "name": "LIVEKIT_AGENT_NAME", "value": "convis-agent" }
       ],
       "secrets": [
-        { "name": "MONGODB_URI",          "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/mongodb_uri" },
-        { "name": "JWT_SECRET",           "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/jwt_secret" },
-        { "name": "ENCRYPTION_KEY",       "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/encryption_key" },
-        { "name": "EMAIL_USER",           "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/email_user" },
-        { "name": "EMAIL_PASS",           "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/email_pass" },
-        { "name": "OPENAI_API_KEY",       "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/openai_api_key" },
-        { "name": "DEEPGRAM_API_KEY",     "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/deepgram_api_key" },
-        { "name": "ELEVENLABS_API_KEY",   "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/elevenlabs_api_key" },
-        { "name": "LIVEKIT_URL",          "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/livekit_url" },
-        { "name": "LIVEKIT_API_KEY",      "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/livekit_api_key" },
-        { "name": "LIVEKIT_API_SECRET",   "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/livekit_api_secret" }
+        { "name": "MONGODB_URI",                    "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/mongodb_uri" },
+        { "name": "JWT_SECRET",                     "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/jwt_secret" },
+        { "name": "ENCRYPTION_KEY",                 "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/encryption_key" },
+        { "name": "EMAIL_USER",                     "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/email_user" },
+        { "name": "EMAIL_PASS",                     "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/email_pass" },
+        { "name": "SARVAM_API_KEY",                 "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/sarvam_api_key" },
+        { "name": "OPENAI_API_KEY",                 "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/openai_api_key" },
+        { "name": "LIVEKIT_URL",                    "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/livekit_url" },
+        { "name": "LIVEKIT_API_KEY",                "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/livekit_api_key" },
+        { "name": "LIVEKIT_API_SECRET",             "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/livekit_api_secret" },
+        { "name": "LIVEKIT_SIP_OUTBOUND_TRUNK_ID",  "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/livekit_sip_outbound_trunk_id" },
+        { "name": "LIVEKIT_SIP_INBOUND_HOST",       "valueFrom": "arn:aws:secretsmanager:${REGION}:${ACCT}:secret:convis/livekit_sip_inbound_host" }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",

@@ -32,12 +32,19 @@ class Settings(BaseSettings):
     # accidental signing of tokens with a constant, repo-known string.
     jwt_secret: str
 
-    # Provider API Keys (LiveKit stack: Deepgram ASR + OpenAI LLM + ElevenLabs TTS)
+    # Provider API Keys — full Sarvam stack (Saaras v3 ASR + Sarvam-105b LLM +
+    # Bulbul v3 TTS) after the 2026-05 migration. The single SARVAM_API_KEY
+    # authenticates all three services against api.sarvam.ai.
+    sarvam_api_key: Optional[str] = None
+    # OpenAI key is still used by non-voice paths:
+    #   - post_call_summary_service.py (transcript summarisation)
+    #   - local_embeddings.py / chromadb (RAG vector embeddings)
+    #   - realtime_tool_service.py (legacy tool/intent extraction)
+    # Migration of those paths to Sarvam is out of scope for the voice swap.
     openai_api_key: Optional[str] = None
-    elevenlabs_api_key: Optional[str] = None
-    deepgram_api_key: Optional[str] = None
-    # Optional alternative TTS — Cartesia Sonic (~5× cheaper than ElevenLabs).
-    cartesia_api_key: Optional[str] = None
+    # Deepgram / ElevenLabs / Cartesia keys removed — providers no longer in
+    # use after the 2026-05 Sarvam migration. If you redeploy and these env
+    # vars are still set they'll be ignored (pydantic-settings extra='ignore').
 
     # Encryption Configuration (for production)
     encryption_key: Optional[str] = None

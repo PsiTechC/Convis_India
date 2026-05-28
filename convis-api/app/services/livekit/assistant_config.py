@@ -3,11 +3,23 @@
 Shared by the FastAPI process (for browser token dispatch) and the agent worker
 process (which reads room metadata to find the assistant_id, then calls this).
 
-Convis shares its MongoDB with other unrelated projects that store assistants
-with different ASR/LLM/TTS provider values (Qwen, Sarvam, Piper, Whisper, etc).
-This loader coerces any non-supported value back to the locked Convis stack —
-Deepgram ASR + OpenAI LLM + ElevenLabs TTS — so a foreign project's writes can
-never crash a Convis call (e.g. agent sending model=Qwen/... to Deepgram → 403).
+Convis shares its MongoDB with other projects that store assistants with
+different ASR/LLM/TTS provider values. This loader coerces any non-supported
+value back to the locked Convis-India stack — Sarvam Saaras v3 ASR +
+Sarvam-105b LLM + Sarvam Bulbul TTS — so a foreign project's writes can never
+crash a Convis call (e.g. nova-2-phonecall, gpt-4o-mini, or ElevenLabs voice
+IDs from legacy docs).
+
+Migrations:
+  - 2026-05-23 TTS: ElevenLabs + Cartesia removed in favour of Sarvam Bulbul.
+  - 2026-05-23 LLM: OpenAI removed in favour of Sarvam-105b. build_system_message()
+    prepends "/nothink" so sarvam-105b skips its <think>...</think> reasoning
+    blocks (which would add 2-5s of latency per turn).
+  - 2026-05-28 ASR: Deepgram removed in favour of Sarvam Saaras v3 with
+    mode=transcribe. Multilingual mode now maps to language="unknown" (Sarvam's
+    auto-detect across 22 Indic languages + en-IN).
+Old Mongo assistants still carry stale provider values; the coercion layer
+maps them to Sarvam defaults at load time without rewriting the docs.
 """
 from __future__ import annotations
 
@@ -25,94 +37,98 @@ logger = logging.getLogger(__name__)
 
 
 # ── Locked provider whitelists ───────────────────────────────────────────────
-_DEEPGRAM_ASR_MODELS = {
-    "nova-3", "nova-2", "nova-2-general", "nova-2-meeting",
-    "nova-2-phonecall", "nova-2-finance", "nova-2-conversationalai",
-    "nova-2-voicemail", "nova-2-video", "nova-2-medical", "nova-2-drivethru",
-    "enhanced", "enhanced-general", "enhanced-meeting", "enhanced-phonecall",
-    "base", "base-general", "base-meeting", "base-phonecall",
-}
-_DEEPGRAM_LANGS = {
-    "en", "en-US", "en-GB", "en-AU", "en-IN", "en-NZ", "multi",
-    "es", "es-419", "fr", "fr-CA", "de", "hi", "hi-Latn", "it", "ja", "ko",
-    "nl", "pt", "pt-BR", "ru", "zh", "zh-CN", "zh-TW", "tr", "uk", "id", "vi",
-    "th", "pl", "sv", "da", "fi", "el", "ar", "he", "cs", "ro", "no", "ms", "ta",
-}
-_OPENAI_LLM_MODELS = {
-    "gpt-4o", "gpt-4o-mini", "gpt-4o-2024-11-20", "gpt-4o-2024-08-06",
-    "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo",
-    "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
-}
-_ELEVEN_TTS_MODELS = {
-    "eleven_flash_v2_5", "eleven_turbo_v2_5", "eleven_multilingual_v2",
-    "eleven_monolingual_v1", "eleven_flash_v2", "eleven_turbo_v2",
-    "eleven_v3",
-}
-# ElevenLabs voice IDs are 20-char alphanumeric (e.g. "21m00Tcm4TlvDq8ikWAM" = Rachel).
-# Anything else ("alloy", "anushka", "en_US-lessac-medium") is from a foreign stack.
-_ELEVEN_VOICE_RE = re.compile(r"^[A-Za-z0-9]{20}$")
-_RACHEL_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"
+# Sarvam Saaras / Saarika — Indic-language ASR (post-migration 2026-05-28).
+# Saaras v3 supports all 22 Indic languages plus en-IN in transcribe mode;
+# Saarika v2.5 covers 11 of those. Saaras v2.5 is translate-only (forces
+# English output) — kept in the whitelist for explicit opt-in but not the
+# default, because voice agents need source-language transcripts so the LLM
+# and TTS can reply in the caller's language.
+_SARVAM_ASR_MODELS = {"saaras:v3", "saarika:v2.5", "saaras:v2.5"}
+_SARVAM_DEFAULT_ASR_MODEL = "saaras:v3"
 
-# Cartesia Sonic — alternate TTS provider, ~5× cheaper than ElevenLabs Flash.
-# Voice IDs are UUIDs.
+# Saaras v3 modes — `transcribe` keeps source language, `translate` forces
+# English output. The others (verbatim, translit, codemix) are Sarvam-specific
+# transformations useful in narrower cases.
+_SARVAM_ASR_MODES = {"transcribe", "translate", "verbatim", "translit", "codemix"}
+_SARVAM_DEFAULT_ASR_MODE = "transcribe"
+
+# Sarvam ASR languages (BCP-47 India-locale). "unknown" → server-side
+# auto-detection across all supported languages, used when multilingual mode
+# is on. Saarika v2.5 supports the first 12 codes; Saaras v3 supports all 23.
+_SARVAM_ASR_LANGUAGES = {
+    "unknown",
+    # saarika:v2.5 + saaras:v3
+    "en-IN", "hi-IN", "bn-IN", "gu-IN", "kn-IN", "ml-IN",
+    "mr-IN", "od-IN", "pa-IN", "ta-IN", "te-IN",
+    # saaras:v3-only (Northeast / less-resourced langs)
+    "as-IN", "ur-IN", "ne-IN", "kok-IN", "ks-IN", "sd-IN",
+    "sa-IN", "sat-IN", "mni-IN", "brx-IN", "mai-IN", "doi-IN",
+}
+_SARVAM_DEFAULT_ASR_LANGUAGE = "en-IN"
+# Sarvam LLM whitelist. sarvam-105b is the flagship; sarvam-m is the smaller/
+# faster alternative. -16k / -32k suffixes are deprecated by Sarvam but kept
+# in the whitelist for backward compatibility (the plugin still accepts them).
+_SARVAM_LLM_MODELS = {
+    "sarvam-m",
+    "sarvam-30b",
+    "sarvam-30b-16k",   # deprecated by Sarvam
+    "sarvam-105b",
+    "sarvam-105b-32k",  # deprecated by Sarvam
+}
+_SARVAM_DEFAULT_LLM_MODEL = "sarvam-105b"
+# Sarvam Bulbul — the only supported TTS provider for Convis-India.
 #
-# sonic-3 is Cartesia's current flagship streaming model and is the plugin
-# default. We default to it explicitly so a future plugin upgrade (which may
-# change the default again) doesn't silently shift our users.
-_CARTESIA_TTS_MODELS = {
-    "sonic-3",
-    "sonic-2",          # previous-gen; still supported, kept for explicit pinning
-    "sonic",
-    "sonic-lite",
-    "sonic-preview",
-    "sonic-turbo",
-    "sonic-english",
-    "sonic-multilingual",
-}
-_CARTESIA_DEFAULT_MODEL = "sonic-3"
-# UUIDs are case-insensitive per RFC 4122. Cartesia returns lowercase from
-# their API but accepts both — and many of their docs/examples use uppercase.
-_CARTESIA_VOICE_RE = re.compile(
-    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-)
-# Default Cartesia voice — "Maya" is a clear, neutral female voice ideal for
-# customer service. Override per-assistant with a UUID from Cartesia voice library.
-_CARTESIA_DEFAULT_VOICE = "694f9389-aac1-45b6-b726-9d9369183238"
+# Model defaults to bulbul:v3 — the streaming-capable flagship. The
+# livekit-plugins-sarvam 1.5.12 plugin handles v3 correctly (sends
+# temperature + omits pitch/loudness for v3 per Sarvam's v3 API). v2 is kept
+# in the whitelist as opt-in for assistants that need v2-only speakers
+# (anushka, manisha, vidya, arya, abhilash, karun, hitesh).
+_SARVAM_TTS_MODELS = {"bulbul:v2", "bulbul:v3", "bulbul:v3-beta"}
+_SARVAM_DEFAULT_MODEL = "bulbul:v3"
 
-# Cartesia-native knobs. These are NOT mirrored to ElevenLabs — each provider
-# gets its own native tuning surface.
+# Sarvam Bulbul speaker names (per livekit-plugins-sarvam 1.5.12's
+# MODEL_SPEAKER_COMPATIBILITY table). The plugin enforces per-model
+# compatibility — sending a v2-only speaker like "anushka" to bulbul:v3
+# raises ValueError on TTS instantiation. We track v2 and v3 speakers
+# separately so _coerce_tts_voice can pick a model-appropriate default.
 #
-# Emotions: sonic-3 uses Cartesia's "generation_config" path which takes a
-# SINGLE Title-Case emotion string. The full Literal enum from the plugin
-# (livekit/plugins/cartesia/models.py::TTSVoiceEmotion) is mirrored below so
-# any value the plugin accepts also passes our whitelist. (Sonic-2's legacy
-# "__experimental_controls" path used lowercase <name>:<level> tokens; that
-# format is dead in sonic-3 and we deliberately don't support it — pinning
-# to legacy api_version would lock us to a sunsetting Cartesia model.)
-_CARTESIA_EMOTION_NAMES = {
-    "Happy", "Excited", "Enthusiastic", "Elated", "Euphoric", "Triumphant",
-    "Amazed", "Surprised", "Flirtatious", "Joking/Comedic", "Curious",
-    "Content", "Peaceful", "Serene", "Calm", "Grateful", "Affectionate",
-    "Trust", "Sympathetic", "Anticipation", "Mysterious", "Angry", "Mad",
-    "Outraged", "Frustrated", "Agitated", "Threatened", "Disgusted",
-    "Contempt", "Envious", "Sarcastic", "Ironic", "Sad", "Dejected",
-    "Melancholic", "Disappointed", "Hurt", "Guilty", "Bored", "Tired",
-    "Rejected", "Nostalgic", "Wistful", "Apologetic", "Hesitant", "Insecure",
-    "Confused", "Resigned", "Anxious", "Panicked", "Alarmed", "Scared",
-    "Neutral", "Proud", "Confident", "Distant", "Skeptical", "Contemplative",
-    "Determined",
-}
-# Case-folded lookup for tolerant matching ("happy" / "HAPPY" / "Happy" all
-# resolve to "Happy"). Built once at module load.
-_CARTESIA_EMOTION_LOOKUP = {e.lower(): e for e in _CARTESIA_EMOTION_NAMES}
-# Sonic-3 supports a wide set; whitelist the BCP-47 short codes Cartesia
-# actually accepts (one-to-one with their /voices language tags).
-_CARTESIA_LANGUAGES = {
-    "en", "es", "fr", "de", "it", "pt", "pl", "ru", "nl", "tr", "ja", "ko",
-    "zh", "hi", "id", "sv", "cs", "ar", "ro", "hu",
+# v2 speakers (7): the original Bulbul set — anushka is the recognisable
+# female Indian-English voice. Confirmed NOT supported on v3.
+_SARVAM_V2_SPEAKERS = {
+    "anushka", "manisha", "vidya", "arya",          # female
+    "abhilash", "karun", "hitesh",                  # male
 }
 
-_TTS_PROVIDERS = {"elevenlabs", "cartesia"}
+# v3 speakers (30): broader customer-care, conversational, narrator set.
+# shubh (male Hindi) is the plugin's auto-default when speaker=None + v3,
+# and our locked Convis-India default.
+_SARVAM_V3_SPEAKERS = {
+    # female
+    "ritu", "pooja", "simran", "kavya", "ishita", "shreya", "priya",
+    "neha", "roopa", "amelia", "sophia",
+    "suhani", "rupali", "tanya", "shruti", "kavitha",
+    # male
+    "shubh", "rahul", "amit", "ratan", "rohan", "dev", "manan", "sumit",
+    "aditya", "kabir", "varun", "aayan", "ashutosh", "advait",
+}
+
+# Union — used as the "is this a recognised Sarvam speaker at all?" check.
+_SARVAM_TTS_SPEAKERS = _SARVAM_V2_SPEAKERS | _SARVAM_V3_SPEAKERS
+
+_SARVAM_DEFAULT_SPEAKER = "shubh"  # male Hindi, v3-compatible
+
+# Sarvam Bulbul languages (BCP-47, India-locale). en-IN is the Convis default.
+# Saaras:v3 supports more Indic languages on the ASR side, but Bulbul's TTS
+# catalogue is limited to these 11 — keep ASR/TTS language coercion separate.
+_SARVAM_TTS_LANGUAGES = {
+    "bn-IN", "en-IN", "gu-IN", "hi-IN", "kn-IN", "ml-IN",
+    "mr-IN", "od-IN", "pa-IN", "ta-IN", "te-IN",
+}
+_SARVAM_DEFAULT_LANGUAGE = "en-IN"
+
+# Single supported provider after the 2026-05-23 migration. Kept as a set so
+# the coercer's API is unchanged and future additions are easy.
+_TTS_PROVIDERS = {"sarvam"}
 
 
 # ── Expressive mode ──────────────────────────────────────────────────────────
@@ -139,15 +155,16 @@ Speaking style: You are speaking aloud over a phone call — sound natural and h
 Stay professional and measured. Do NOT use spelled-out laughs ("haha"), exclamations ("oh nice", "wow", "oof"), or hype phrases — these sound jarring in formal contexts (callers asking about products, prices, policies). Match the caller's tone: keep it warm but composed."""
 
 
-# Multilingual mode: opt-in. When enabled, ASR runs in language=multi (auto-
-# detect per utterance across 30+ languages) and the LLM is instructed to
-# match the caller's language. ElevenLabs Flash v2.5 already speaks 32
-# languages from the same voice ID, so no TTS change is needed.
+# Multilingual mode: opt-in. When enabled, ASR runs in language="unknown"
+# (Sarvam Saaras v3 auto-detects per utterance across 22 Indic languages +
+# en-IN, with native code-switching support) and the LLM is instructed to
+# match the caller's language. Sarvam Bulbul TTS supports the 11 most common
+# Indic languages from the same speaker, so no TTS change is needed for
+# multilingual flows that stick to those languages.
 #
-# Trade-off: switching ASR off `nova-2-phonecall` (English+PSTN-tuned) onto
-# `nova-2` (general multilingual) loses some accuracy on noisy 8 kHz English
-# phone audio. Acceptable for multilingual use cases; do not enable for
-# English-only customers chasing best PSTN WER.
+# Trade-off: pinning a specific language code (e.g. "hi-IN") gives Sarvam
+# tighter accuracy than auto-detect on that language. Enable multilingual
+# only for assistants that genuinely expect callers in multiple languages.
 _MULTILINGUAL_PROMPT_SUFFIX = """
 ---
 LANGUAGE MATCHING — CRITICAL OVERRIDE:
@@ -391,6 +408,13 @@ def build_system_message(
     `call_transfer_*` are defaulted so existing callers (and the warmer when an
     assistant has transfer off) produce byte-identical output to before this
     feature shipped.
+
+    /nothink PREFIX (Sarvam-105b — added 2026-05-23): sarvam-105b emits
+    <think>...</think> reasoning blocks by default, adding 2-5s of latency
+    per turn. Prepending the literal token "/nothink" to the prompt disables
+    this behaviour. The token is documented by Sarvam and must appear at the
+    start of a message the model sees. Placing it at the very top of the
+    system prompt covers every turn without needing per-message injection.
     """
     msg = base_message or "You are a helpful assistant."
     if calendar_enabled:
@@ -414,7 +438,12 @@ def build_system_message(
     # the farewell-detection instruction. Append LAST so the most recent
     # instruction in the prompt is the call-control one.
     msg = msg + _END_CALL_PROMPT_SUFFIX
-    return msg
+    # /nothink — Sarvam-105b reasoning toggle. MUST be the very first token
+    # the model sees, before any other instruction. Disables <think>...</think>
+    # reasoning blocks (which would add 2-5s of latency per turn). Re-prepend
+    # AFTER all suffixes so a future refactor that touches the assembly order
+    # can't accidentally bury this token mid-prompt.
+    return "/nothink\n\n" + msg
 
 
 def _coerce_multilingual_mode(v: Any) -> bool:
@@ -531,85 +560,95 @@ def _coerce_positive_int(v: Any, *, default: int, lo: int, hi: int) -> int:
 
 
 def _coerce_asr_model(v: Any) -> str:
-    if isinstance(v, str) and v in _DEEPGRAM_ASR_MODELS:
+    """Sarvam ASR model whitelist. Default saaras:v3 (broadest language coverage,
+    streaming, transcribe mode keeps source language). Stale Deepgram model
+    strings (nova-2-phonecall, nova-3, etc.) from pre-migration docs coerce
+    silently with a warning."""
+    if isinstance(v, str) and v in _SARVAM_ASR_MODELS:
         return v
-    if v not in (None, "", "nova-2"):
-        logger.warning("[CONFIG] Coercing unsupported asr_model=%r → 'nova-2'", v)
-    return "nova-2"
+    if v not in (None, "", _SARVAM_DEFAULT_ASR_MODEL):
+        logger.warning("[CONFIG] Coercing unsupported asr_model=%r → %r",
+                       v, _SARVAM_DEFAULT_ASR_MODEL)
+    return _SARVAM_DEFAULT_ASR_MODEL
+
+
+def _coerce_asr_mode(v: Any) -> str:
+    """Sarvam Saaras v3 mode. Default 'transcribe' (keeps source language).
+    Other modes (translate, verbatim, translit, codemix) require explicit
+    opt-in. saarika:v2.5 ignores this field at the API level — coercion is
+    still applied so the value passed to sarvam.STT() is always valid."""
+    if isinstance(v, str) and v in _SARVAM_ASR_MODES:
+        return v
+    if v not in (None, "", _SARVAM_DEFAULT_ASR_MODE):
+        logger.warning("[CONFIG] Coercing unsupported asr_mode=%r → %r",
+                       v, _SARVAM_DEFAULT_ASR_MODE)
+    return _SARVAM_DEFAULT_ASR_MODE
 
 
 def _coerce_asr_lang(v: Any) -> str:
-    if isinstance(v, str) and v in _DEEPGRAM_LANGS:
-        return v
-    if v not in (None, "", "en"):
-        logger.warning("[CONFIG] Coercing unsupported asr_language=%r → 'en'", v)
-    return "en"
+    """Sarvam ASR language (BCP-47 India-locale + 'unknown' for auto-detect).
+    Tolerates short codes ('hi', 'en', 'multi') by upgrading to the -IN
+    variant or to 'unknown'. Stale Deepgram lang codes (en-US, en-GB, etc.)
+    coerce to en-IN."""
+    if isinstance(v, str):
+        s = v.strip()
+        if s in _SARVAM_ASR_LANGUAGES:
+            return s
+        # Deepgram-era "multi" → Sarvam "unknown" (auto-detect).
+        if s.lower() == "multi":
+            return "unknown"
+        # Short code upgrade: 'hi' → 'hi-IN', 'en' → 'en-IN', etc.
+        short = s.split("-", 1)[0].lower()
+        upgrade = f"{short}-IN"
+        if upgrade in _SARVAM_ASR_LANGUAGES:
+            return upgrade
+        if s:
+            logger.warning("[CONFIG] Coercing unsupported asr_language=%r → %r",
+                           v, _SARVAM_DEFAULT_ASR_LANGUAGE)
+    return _SARVAM_DEFAULT_ASR_LANGUAGE
 
 
 def _coerce_llm_model(v: Any) -> str:
-    if isinstance(v, str) and v in _OPENAI_LLM_MODELS:
+    """Sarvam LLM model whitelist. Default sarvam-105b (the flagship). Stale
+    OpenAI model strings (gpt-4o-mini, gpt-4-turbo, etc.) from pre-migration
+    docs coerce silently with a warning."""
+    if isinstance(v, str) and v in _SARVAM_LLM_MODELS:
         return v
-    if v not in (None, "", "gpt-4o-mini"):
-        logger.warning("[CONFIG] Coercing unsupported llm_model=%r → 'gpt-4o-mini'", v)
-    return "gpt-4o-mini"
+    if v not in (None, "", _SARVAM_DEFAULT_LLM_MODEL):
+        logger.warning("[CONFIG] Coercing unsupported llm_model=%r → %r",
+                       v, _SARVAM_DEFAULT_LLM_MODEL)
+    return _SARVAM_DEFAULT_LLM_MODEL
 
 
 def _coerce_tts_provider(v: Any) -> str:
-    """Default to ElevenLabs (existing prod path). Cartesia is opt-in per assistant."""
-    if isinstance(v, str) and v.lower() in _TTS_PROVIDERS:
-        return v.lower()
-    if v not in (None, "", "elevenlabs"):
-        logger.warning("[CONFIG] Coercing unsupported tts_provider=%r → 'elevenlabs'", v)
-    return "elevenlabs"
+    """The only supported TTS provider is Sarvam. Anything else (incl. legacy
+    'elevenlabs' / 'cartesia' values from before the 2026-05-23 migration)
+    coerces to 'sarvam' with a warning."""
+    if isinstance(v, str) and v.lower() == "sarvam":
+        return "sarvam"
+    if v not in (None, "", "sarvam"):
+        logger.warning("[CONFIG] Coercing unsupported tts_provider=%r → 'sarvam'", v)
+    return "sarvam"
 
 
-def _coerce_tts_model(v: Any, provider: str = "elevenlabs") -> str:
-    """Pick a model whitelist based on TTS provider. ElevenLabs and Cartesia
-    use entirely different model namespaces — eleven_flash_v2_5 vs sonic-3.
-
-    Cartesia default is sonic-3 (current flagship, supports the modern
-    generation_config.emotion path).
-
-    Auto-upgrade: legacy sonic-2 / sonic / sonic-english / sonic-multilingual
-    / sonic-turbo are RUNTIME-FORCED to sonic-3 here. The historical reason:
-    those assistants stored their model by platform default (the UI never
-    exposed a model picker), not by deliberate user choice. Forcing sonic-3
-    gives them the modern emotion controls + better quality without anyone
-    having to re-save the assistant. sonic-lite / sonic-preview are also
-    upgraded for the same reason. Mongo docs may still have stale values;
-    that's fine — the coercion overrides at every agent load."""
-    if provider == "cartesia":
-        if isinstance(v, str) and v in _CARTESIA_TTS_MODELS:
-            # Auto-upgrade ANY legacy sonic-* to sonic-3.
-            # The whitelist still includes them for forward-compat (e.g. a
-            # future admin tool that explicitly wants to pin an older model
-            # could re-route through a different path), but the live agent
-            # always serves sonic-3.
-            if v != _CARTESIA_DEFAULT_MODEL:
-                logger.info(
-                    "[CONFIG] Auto-upgrading legacy Cartesia tts_model=%r → %r "
-                    "(historical platform default, not a deliberate pin)",
-                    v, _CARTESIA_DEFAULT_MODEL,
-                )
-                return _CARTESIA_DEFAULT_MODEL
-            return v
-        if v not in (None, "", _CARTESIA_DEFAULT_MODEL):
-            logger.warning("[CONFIG] Coercing Cartesia tts_model=%r → %r",
-                           v, _CARTESIA_DEFAULT_MODEL)
-        return _CARTESIA_DEFAULT_MODEL
-    # default: ElevenLabs
-    if isinstance(v, str) and v in _ELEVEN_TTS_MODELS:
+def _coerce_tts_model(v: Any, provider: str = "sarvam") -> str:
+    """Sarvam Bulbul model whitelist. Default bulbul:v2 (avoids the v3
+    pitch/loudness plugin bug). v3 / v3-beta are accepted for explicit opt-in
+    once a workaround is in place. Old ElevenLabs / Cartesia model strings
+    (eleven_flash_v2_5, sonic-3, …) from pre-migration docs coerce silently."""
+    if isinstance(v, str) and v in _SARVAM_TTS_MODELS:
         return v
-    if v not in (None, "", "eleven_flash_v2_5"):
-        logger.warning("[CONFIG] Coercing unsupported tts_model=%r → 'eleven_flash_v2_5'", v)
-    return "eleven_flash_v2_5"
+    if v not in (None, "", _SARVAM_DEFAULT_MODEL):
+        logger.warning("[CONFIG] Coercing unsupported tts_model=%r → %r",
+                       v, _SARVAM_DEFAULT_MODEL)
+    return _SARVAM_DEFAULT_MODEL
 
 
-# ElevenLabs v3 audio-cue tags ([laughs], [sneezes], [whispers], …). They only
-# do anything on the v3 model — which we never run (coerced to flash_v2_5). On
-# flash they'd be SPOKEN LITERALLY ("open bracket laughs close bracket"), so
-# strip them from greetings defensively. Conservative pattern: a short
-# lowercase-word(s) token in square brackets.
+# Audio-cue tags ([laughs], [sneezes], [whispers], …) — legacy ElevenLabs v3
+# expressive markup. Sarvam Bulbul has no equivalent and would speak the
+# bracketed text literally ("open bracket laughs close bracket"). Strip them
+# from greetings defensively so old assistant docs that carry these tags
+# don't sound broken.
 _AUDIO_TAG_RE = re.compile(r"\[[a-z][a-z _-]{0,30}\]")
 
 
@@ -619,84 +658,84 @@ def _strip_audio_cue_tags(text: Any) -> Any:
     cleaned = _AUDIO_TAG_RE.sub("", text)
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     if cleaned and cleaned != text:
-        logger.warning("[CONFIG] stripped ElevenLabs-v3 audio-cue tag(s) from greeting "
-                       "(flash_v2_5 would read them aloud)")
+        logger.warning("[CONFIG] stripped legacy audio-cue tag(s) from greeting "
+                       "(Sarvam Bulbul would read them aloud)")
         return cleaned
     return text
 
 
-def _coerce_tts_voice(v: Any, provider: str = "elevenlabs") -> str:
-    """Voice ID format depends on provider — ElevenLabs uses 20-char alnum,
-    Cartesia uses UUID. A voice from one provider is not valid for the other."""
-    if provider == "cartesia":
-        if isinstance(v, str) and _CARTESIA_VOICE_RE.match(v):
-            return v
-        if v not in (None, "", _CARTESIA_DEFAULT_VOICE):
-            logger.warning("[CONFIG] Coercing non-Cartesia tts_voice=%r → default", v)
-        return _CARTESIA_DEFAULT_VOICE
-    # default: ElevenLabs
-    if isinstance(v, str) and _ELEVEN_VOICE_RE.match(v):
+def _coerce_tts_voice(v: Any, provider: str = "sarvam", model: str = _SARVAM_DEFAULT_MODEL) -> str:
+    """Sarvam Bulbul speaker, validated against the target model's compatibility
+    list (livekit-plugins-sarvam enforces this strictly — sending an incompatible
+    speaker raises ValueError on TTS init, which would crash every agent job).
+
+    Per-model defaults:
+      - bulbul:v2 → 'anushka' (female Indian-English)
+      - bulbul:v3 / v3-beta → 'shubh' (male Hindi, plugin's own v3 default)
+
+    Coercion rules:
+      - Unknown / legacy values (ElevenLabs 20-char IDs, Cartesia UUIDs,
+        OpenAI 'alloy', etc.) → model-appropriate default.
+      - v2-only speaker (e.g. 'anushka') + model=v3 → downgrade to 'shubh'
+        (anushka does NOT work on v3, confirmed end-to-end).
+      - v3-only speaker (e.g. 'pooja') + model=v2 → downgrade to 'anushka'.
+    """
+    # Pick the compatibility set + per-model default.
+    if model in ("bulbul:v3", "bulbul:v3-beta"):
+        compatible = _SARVAM_V3_SPEAKERS
+        model_default = "shubh"
+    elif model == "bulbul:v2":
+        compatible = _SARVAM_V2_SPEAKERS
+        model_default = "anushka"
+    else:
+        # Unknown model — fall back to the union set and the locked default.
+        compatible = _SARVAM_TTS_SPEAKERS
+        model_default = _SARVAM_DEFAULT_SPEAKER
+
+    if isinstance(v, str) and v in compatible:
         return v
-    if v not in (None, "", _RACHEL_VOICE_ID):
-        logger.warning("[CONFIG] Coercing non-ElevenLabs tts_voice=%r → Rachel", v)
-    return _RACHEL_VOICE_ID
+    # Speaker is either unknown entirely or known-but-incompatible with this
+    # model. Distinguish so the warning is informative.
+    if isinstance(v, str) and v in _SARVAM_TTS_SPEAKERS:
+        logger.warning("[CONFIG] Speaker %r is incompatible with model=%r — "
+                       "downgrading to %r", v, model, model_default)
+    elif v not in (None, "", model_default):
+        logger.warning("[CONFIG] Coercing unsupported tts_voice=%r → %r (model=%r)",
+                       v, model_default, model)
+    return model_default
 
 
 def _coerce_tts_language(v: Any) -> str:
-    """Cartesia-only knob. BCP-47 short code from the whitelist; else 'en'.
-    ElevenLabs ignores this — its model handles language detection per voice."""
+    """Sarvam Bulbul language code (BCP-47, India-locale). Default 'en-IN'.
+
+    Accepts the 11 codes Bulbul supports (bn-IN, en-IN, gu-IN, hi-IN, kn-IN,
+    ml-IN, mr-IN, od-IN, pa-IN, ta-IN, te-IN). Tolerates short codes ('hi',
+    'en') by upgrading to the -IN variant. Old Cartesia short codes (e.g. 'es',
+    'fr') warn and coerce to en-IN."""
     if isinstance(v, str):
-        s = v.strip().lower()
-        # Accept "en-US" → "en" (Cartesia uses short codes only).
-        s = s.split("-", 1)[0]
-        if s in _CARTESIA_LANGUAGES:
+        s = v.strip()
+        if s in _SARVAM_TTS_LANGUAGES:
             return s
+        # Tolerate bare short codes — Bulbul only does Indian languages so
+        # we upgrade 'hi' → 'hi-IN', 'en' → 'en-IN', etc.
+        short = s.split("-", 1)[0].lower()
+        upgrade = f"{short}-IN"
+        if upgrade in _SARVAM_TTS_LANGUAGES:
+            return upgrade
         if s:
-            logger.warning("[CONFIG] Coercing unsupported tts_language=%r → 'en'", v)
-    return "en"
+            logger.warning("[CONFIG] Coercing unsupported tts_language=%r → %r",
+                           v, _SARVAM_DEFAULT_LANGUAGE)
+    return _SARVAM_DEFAULT_LANGUAGE
 
 
 def _coerce_tts_emotion(v: Any) -> list:
-    """Cartesia (sonic-3) takes a SINGLE emotion value drawn from its Title-Case
-    Literal enum (Happy / Curious / Determined / Calm / …). We store the field
-    as a list for Mongo / Pydantic stability (forward-compat with future
-    multi-emotion APIs and zero-migration for the [] default), but the list
-    always has zero or one element after coercion.
-
-    Accepts: a string ("happy" / "HAPPY" / "Happy" — all resolve to "Happy"),
-    or a list/tuple (we pick the first valid value), or empty/None ([] = no
-    emotion). Anything else → [] (Cartesia falls back to its natural prosody,
-    no crash, no API error).
-
-    NOTE: ANY legacy ":level" suffix from the pre-sonic-3 emotion format is
-    stripped silently — sonic-3 doesn't understand "<name>:<level>" and would
-    400 on it. Surfacing that as a warning so we can spot stale Mongo docs.
-    """
-    if v is None or v == "" or v == [] or v == ():
-        return []
-    # Normalize to a list of string tokens to scan
-    if isinstance(v, str):
-        tokens = [t.strip() for t in v.replace(";", ",").split(",") if t.strip()]
-    elif isinstance(v, (list, tuple)):
-        tokens = [str(t).strip() for t in v if str(t).strip()]
-    else:
-        return []
-
-    for tok in tokens:
-        # Strip legacy ":level" suffix from the old sonic-2 experimental_controls
-        # syntax — sonic-3 rejects it.
-        if ":" in tok:
-            logger.warning(
-                "[CONFIG] Stripping legacy ':level' suffix from Cartesia emotion=%r "
-                "(sonic-3 uses single-value emotion, not <name>:<level>)", tok,
-            )
-            tok = tok.split(":", 1)[0]
-        canonical = _CARTESIA_EMOTION_LOOKUP.get(tok.lower())
-        if not canonical:
-            logger.warning("[CONFIG] Dropping unknown Cartesia emotion=%r", tok)
-            continue
-        # First valid match wins; sonic-3 takes one.
-        return [canonical]
+    """No-op coercer. Sarvam Bulbul has no emotion-control parameter; any
+    value stored on an assistant doc from the Cartesia era is dropped. Kept
+    as a function (returning []) so call sites and Mongo schema are stable
+    until we get round to removing the field entirely."""
+    if v not in (None, "", [], ()):
+        logger.debug("[CONFIG] Dropping legacy tts_emotion=%r (Sarvam Bulbul has no "
+                     "emotion control)", v)
     return []
 
 
@@ -755,28 +794,20 @@ def load_assistant_config(assistant_id: str) -> Dict[str, Any]:
     # suffix so the LLM responds more conversationally.
     expressive_mode = _coerce_expressive_mode(assistant.get("expressive_mode"))
     tts_model = _coerce_tts_model(assistant.get("tts_model"), tts_provider)
-    # Defensive: if any assistant got eleven_v3 stored (from the brief
-    # window where we forced it), coerce back to flash so calls don't 403.
-    if tts_model == "eleven_v3":
-        logger.warning(
-            "[CONFIG] Coercing tts_model=eleven_v3 → eleven_flash_v2_5 "
-            "(v3 not supported by livekit-plugins-elevenlabs streaming WSS)"
-        )
-        tts_model = "eleven_flash_v2_5"
 
-    # Multilingual mode: forces ASR to nova-3 + language=multi. nova-3
-    # specifically supports code-switching (caller flips between languages
-    # mid-utterance) with materially better accuracy than nova-2's "multi".
-    # The single "multi" language code tells Deepgram to auto-detect per
-    # utterance — no `detect_language=True` is needed (and using both can
-    # actually reduce code-switching quality).
+    # Multilingual mode: forces ASR to Sarvam Saaras v3 with language="unknown"
+    # so Sarvam auto-detects per utterance across all 22 supported Indic
+    # languages plus en-IN. Saaras v3 specifically supports code-switching
+    # (caller flips Hindi ↔ English mid-utterance). When OFF, the configured
+    # language (e.g. "hi-IN") is pinned for tighter accuracy.
     multilingual_mode = _coerce_multilingual_mode(assistant.get("multilingual"))
     if multilingual_mode:
-        asr_model_resolved = "nova-3"
-        asr_lang_resolved = "multi"
+        asr_model_resolved = "saaras:v3"
+        asr_lang_resolved = "unknown"
     else:
         asr_model_resolved = _coerce_asr_model(assistant.get("asr_model"))
         asr_lang_resolved = _coerce_asr_lang(assistant.get("asr_language"))
+    asr_mode_resolved = _coerce_asr_mode(assistant.get("asr_mode"))
 
     # Call transfer to a human agent: opt-in per assistant. The "effective"
     # flag requires BOTH the toggle AND a valid E.164 number — so the prompt
@@ -839,20 +870,27 @@ def load_assistant_config(assistant_id: str) -> Dict[str, Any]:
         "greeting": _strip_audio_cue_tags(assistant.get("call_greeting") or "Hello! How can I help you today?"),
         # voice/tts/asr/llm are coerced to the locked Convis stack — see module docstring.
         "tts_provider": tts_provider,
-        "voice": _coerce_tts_voice(raw_voice, tts_provider),
-        "tts_voice": _coerce_tts_voice(raw_voice, tts_provider),
+        "voice": _coerce_tts_voice(raw_voice, tts_provider, tts_model),
+        "tts_voice": _coerce_tts_voice(raw_voice, tts_provider, tts_model),
         "tts_model": tts_model,
         "expressive_mode": expressive_mode,
         "multilingual": multilingual_mode,
+        # Legacy ElevenLabs voice_settings (stability / similarity_boost / style).
+        # Sarvam Bulbul ignores these — the agent worker no longer reads them
+        # — but we keep them in the returned dict so the frontend's
+        # assistant-edit form doesn't choke on a missing field. Safe to remove
+        # once the frontend is migrated to Sarvam-native controls.
         "tts_stability": assistant.get("tts_stability", 0.5),
         "tts_similarity_boost": assistant.get("tts_similarity_boost", 0.75),
         "tts_style": assistant.get("tts_style", 0.0),
+        # Sarvam Bulbul's pace control. Maps to the `pace` kwarg in
+        # sarvam.TTS(). 1.0 is natural speed; 0.5–1.5 is the useful range.
         "tts_speed": assistant.get("tts_speed", 1.0),
-        # Cartesia-only knobs. Agent worker reads these only when
-        # tts_provider == "cartesia"; ElevenLabs path ignores them. Coerced
-        # here so an invalid emotion / language can't reach the Cartesia API
-        # mid-call (would 400 and drop the TTS WSS).
+        # Sarvam Bulbul language (BCP-47, India-locale). Default en-IN.
         "tts_language": _coerce_tts_language(assistant.get("tts_language")),
+        # Legacy Cartesia emotion field — now a no-op. Sarvam Bulbul has no
+        # emotion control. Kept in the dict so Mongo schema / frontend shape
+        # stay stable; coerces to [] regardless of what's stored.
         "tts_emotion": _coerce_tts_emotion(assistant.get("tts_emotion")),
         # Per-assistant turn-detection knobs. Without these, agent_worker.py
         # falls back to its DEFAULT_MIN_* constants regardless of what's
@@ -861,7 +899,11 @@ def load_assistant_config(assistant_id: str) -> Dict[str, Any]:
         "min_endpointing_delay": assistant.get("min_endpointing_delay"),
         "asr_endpointing_ms": assistant.get("asr_endpointing_ms"),
         "asr_model": asr_model_resolved,
+        "asr_mode": asr_mode_resolved,
         "asr_language": asr_lang_resolved,
+        # Legacy Deepgram keyword-biasing field. Sarvam Saaras has no
+        # equivalent; the field is no-op'd at the agent worker but kept in
+        # the dict so the API response shape doesn't change.
         "asr_keywords": assistant.get("asr_keywords", []),
         "llm_model": _coerce_llm_model(assistant.get("llm_model")),
         "llm_max_tokens": assistant.get("llm_max_tokens", 250),

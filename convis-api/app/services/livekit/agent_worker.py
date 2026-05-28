@@ -1,5 +1,6 @@
 """LiveKit Agent worker — the entrypoint process that joins rooms and runs
-the Deepgram → OpenAI → ElevenLabs voice pipeline.
+the Deepgram → Sarvam-105b → Sarvam Bulbul voice pipeline. (Phase 2 will move
+ASR to Sarvam Saaras v3 mode=transcribe.)
 
 Runs as its own process. Start with:
     python -m app.services.livekit.agent_worker start
@@ -17,17 +18,28 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
+
+# Load .env into os.environ BEFORE any livekit/sarvam/deepgram import. The
+# LiveKit Agents CLI reads LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET
+# directly from os.environ (not via pydantic-settings), and the Sarvam plugin
+# reads SARVAM_API_KEY the same way. Without this, running the agent worker
+# locally (`python -m app.services.livekit.agent_worker dev`) raises:
+#     ValueError: ws_url is required, or set LIVEKIT_URL environment variable
+# In production (App Runner / ECS), env vars are injected by the task
+# definition so this is a no-op — load_dotenv silently skips when no file
+# exists. .env lives at convis-api/.env (3 parents up from this file).
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parents[3] / ".env")
+except ImportError:
+    # python-dotenv is in requirements.txt; missing → some other startup bug.
+    pass
 
 from livekit import agents, rtc
 from livekit.agents import Agent, AgentSession, ChatContext, JobContext, WorkerOptions, cli, function_tool
-from livekit.plugins import deepgram, elevenlabs, openai, silero
-# Cartesia is optional — only imported if a Convis assistant chose it as TTS.
-# Keeping import lazy avoids a hard dep on cartesia for shops that don't use it.
-try:
-    from livekit.plugins import cartesia as _cartesia  # type: ignore
-except Exception:
-    _cartesia = None  # type: ignore
+from livekit.plugins import sarvam, silero
 
 from app.services.livekit.assistant_config import (
     decode_metadata,
@@ -232,6 +244,21 @@ class ConvisAgent(Agent):
         self._idle_timeout = float(
             config.get("idle_timeout_seconds") or DEFAULT_IDLE_TIMEOUT_SECONDS
         )
+        # Current AgentSession state, mirrored from the session's
+        # agent_state_changed event (see entrypoint hookup).
+        # Possible values per livekit-agents 1.5.x:
+        #   "initializing" — session warming up
+        #   "idle"         — between turns, agent waiting
+        #   "listening"    — user is speaking
+        #   "thinking"     — LLM streaming a response (NO TTS yet — first
+        #                    sentence still being assembled by the tokenizer)
+        #   "speaking"     — bot's TTS is playing audio
+        # The idle_watchdog skips its timeout check while state is "thinking"
+        # or "speaking" so a slow LLM (sarvam-105b can take 15-25s on
+        # open-ended prompts) doesn't get its in-flight response cancelled
+        # by the watchdog firing prematurely. The 45s timeout is now just a
+        # safety net for genuinely hung calls.
+        self._agent_state: str = "initializing"
 
     def _session_or_none(self) -> Any:
         """Return the active AgentSession, or None if it's been torn down.
@@ -294,6 +321,19 @@ class ConvisAgent(Agent):
                     room_name,
                 )
                 return
+            # LLM-aware suppression. While the agent is "thinking" (LLM
+            # streaming tokens — TTS hasn't started yet because the
+            # tokenizer is still assembling the first sentence) or
+            # "speaking" (TTS playing audio), keep refreshing the activity
+            # timestamp instead of counting toward timeout. This prevents
+            # the watchdog from cancelling a slow but progressing LLM
+            # response (observed on sarvam-105b with "explain X" prompts
+            # where the first sentence took 15-20s to complete). The 45s
+            # timeout still applies if the agent state itself stays stuck
+            # for that long — a real hang, not just slow streaming.
+            if self._agent_state in ("thinking", "speaking"):
+                self._last_activity_ts = time.monotonic()
+                continue
             elapsed = time.monotonic() - self._last_activity_ts
             if elapsed >= self._idle_timeout:
                 logger.info(
@@ -320,23 +360,45 @@ class ConvisAgent(Agent):
                 own phrasing — don't paraphrase aggressively.
 
         Returns:
-            Relevant excerpts from the documentation. Empty string if nothing
-            relevant was found — in that case, tell the caller honestly.
+            Relevant excerpts from the documentation, or a short "no result"
+            sentinel string if nothing matches. NEVER returns an empty string
+            — see the rationale below.
         """
+        # MUST NEVER RETURN AN EMPTY STRING.
+        # Sarvam-105b's chat-completions endpoint rejects messages where a
+        # tool's response content is an empty string with HTTP 400:
+        #   "body.messages.N.tool.content : String should have at least 1 character"
+        # When that happens LiveKit retries the request 4 times, sees the
+        # same 400 every time, raises APIConnectionError, and silently drops
+        # the turn — the user hears nothing, the watchdog eventually fires
+        # the farewell. Returning a short prose sentinel keeps Sarvam happy
+        # and lets the LLM apologise to the caller naturally.
+        _NO_RESULT = (
+            "No relevant information was found in the knowledge base for "
+            "this query. Apologise briefly to the caller and suggest a "
+            "human follow-up if appropriate."
+        )
+        _NO_KB = (
+            "This assistant has no knowledge base configured. Apologise "
+            "briefly and answer from general knowledge if you can."
+        )
         try:
             from app.utils.mongo_rag import search, build_context_for_voice
             assistant_id = self._config.get("assistant_id")
             if not assistant_id:
-                return ""
+                return _NO_KB
             # Run sync Mongo + sync OpenAI embedding off the event loop so the
             # audio pipeline (STT/TTS streaming) doesn't stall while we search.
             results = await asyncio.to_thread(
                 search, assistant_id, query, 5, None,
             )
-            return build_context_for_voice(results) or ""
+            content = build_context_for_voice(results) or ""
+            if not content.strip():
+                return _NO_RESULT
+            return content
         except Exception as e:
             logger.warning("[RAG] search_knowledge_base failed: %s", e)
-            return ""
+            return _NO_RESULT
 
     @function_tool
     async def end_call(self, farewell: str) -> str:
@@ -718,12 +780,16 @@ class ConvisAgent(Agent):
 # caused agents to talk over slow speakers). Override per-assistant via room
 # metadata (see _resolve_config) — the "patient" profile bumps these to
 # 300/0.20/0.60 for elderly-care / healthcare workflows.
-DEFAULT_DG_ENDPOINTING_MS = 200       # silence after speech to finalize STT turn
 DEFAULT_MIN_ENDPOINTING_DELAY = 0.15  # AgentSession turn-end debounce (seconds)
 DEFAULT_MIN_INTERRUPTION_DURATION = 0.25  # min speech to trigger barge-in (seconds)
-# Deepgram model tuned for 8 kHz telephony audio. Same price/latency as nova-2
-# but materially better word-error-rate on PSTN, especially accented English.
-DEFAULT_DG_MODEL = "nova-2-phonecall"
+# Sarvam Saaras v3 — Indic-language ASR, supports all 22 Indian languages plus
+# en-IN. Used with mode="transcribe" so the transcript stays in the caller's
+# original language (the alternative `translate` mode forces output to English,
+# which would break Hindi/regional voice agents because the LLM and TTS need
+# to see the actual spoken language).
+DEFAULT_ASR_MODEL = "saaras:v3"
+DEFAULT_ASR_MODE = "transcribe"
+DEFAULT_ASR_LANGUAGE = "en-IN"
 # Hard cap on LLM output length. The system prompt asks for "1-2 sentences"
 # but gpt-4o-mini sometimes legitimately needs more (list-style questions,
 # document-grounded answers). 250 tokens (~190 words ≈ 70 s of speech) gives
@@ -736,11 +802,18 @@ DEFAULT_LLM_MAX_TOKENS = 250
 # (after the last completed turn), the agent gracefully hangs up. Prevents
 # rooms hanging open after the caller leaves without saying goodbye.
 #
-# 15s rather than 10s because (a) callers often pause 5-10s after the greeting
-# to think about their question — 10s was hanging up on real callers, and
-# (b) the watchdog also resets on STT activity now (mid-utterance audio
-# buffering), so the timer truly only counts when the caller is fully silent.
-DEFAULT_IDLE_TIMEOUT_SECONDS = 15.0
+# 45s post-Sarvam migration (was 15s on the gpt-4o-mini + warm prompt cache
+# stack). Sarvam-105b has NO prompt cache and processes the full 4K-token
+# system prompt every turn — observed TTFT ranges from 1-3s on short factual
+# questions to 15-25s on open-ended "explain X" questions where the model
+# generates a long answer. With the old 15s ceiling the watchdog kept firing
+# mid-LLM-call, cancelling the in-flight response and speaking the farewell
+# ("I'll let you go for now. Have a great day!") to a caller who had just
+# asked a question. 45s gives sarvam-105b headroom while still hanging up
+# on genuinely abandoned calls. Tune downward later if we add a per-turn
+# "LLM in flight" gate to mark_activity that suppresses the watchdog during
+# active LLM processing.
+DEFAULT_IDLE_TIMEOUT_SECONDS = 45.0
 # How often the watchdog polls for silence. Cheap async sleep, no I/O.
 _IDLE_WATCHDOG_POLL_SECONDS = 1.0
 
@@ -777,6 +850,24 @@ def prewarm(proc: "agents.JobProcess") -> None:
         )
         proc.userdata["vad"] = None
 
+    # Pre-warm the MongoDB connection. Without this, the FIRST DB access in a
+    # fresh worker process (typically the shutdown callback's call_log lookup)
+    # races the lazy Database.connect() inside Database.get_db() — observed
+    # symptom: `TypeError: 'NoneType' object is not subscriptable` followed by
+    # a delayed "Successfully connected to MongoDB" log because the connect
+    # had to chase down DNS + initial server handshake while the callback
+    # was already running. Doing it here at prewarm gives us a hot pool
+    # before any room is dispatched.
+    try:
+        from app.config.database import Database
+        Database.connect()
+        logger.info("[AGENT] prewarm: MongoDB connection established")
+    except Exception:
+        logger.exception(
+            "[AGENT] prewarm failed to establish MongoDB connection; "
+            "shutdown callbacks may log NoneType errors on first call"
+        )
+
     _warm_provider_tls()
 
 
@@ -788,7 +879,7 @@ def _warm_provider_tls() -> None:
     """
     import socket
     import urllib.request
-    hosts = ("api.deepgram.com", "api.openai.com", "api.elevenlabs.io", "api.cartesia.ai")
+    hosts = ("api.sarvam.ai",)
     warmed = []
     for host in hosts:
         try:
@@ -828,10 +919,10 @@ async def entrypoint(ctx: JobContext) -> None:
         config.get("name"),
     )
     # Explicit ASR / multilingual / KB log line so production calls leave a
-    # trail we can grep when diagnosing language-switching or cache-miss bugs.
+    # trail we can grep when diagnosing language-switching bugs.
     logger.info(
-        "[AGENT] ASR=%s lang=%s | multilingual=%s expressive=%s kb=%s | system_msg_chars=%d",
-        config.get("asr_model"), config.get("asr_language"),
+        "[AGENT] ASR=Sarvam model=%s mode=%s lang=%s | multilingual=%s expressive=%s kb=%s | system_msg_chars=%d",
+        config.get("asr_model"), config.get("asr_mode"), config.get("asr_language"),
         config.get("multilingual"), config.get("expressive_mode"),
         config.get("has_knowledge_base"),
         len(config.get("system_message") or ""),
@@ -890,194 +981,96 @@ async def entrypoint(ctx: JobContext) -> None:
                 "(direction=%s); skipping", direction or "?",
             )
 
-    # Deepgram STT — streaming ASR with interim results.
-    # nova-2-phonecall is the PSTN-tuned model — same price/latency as nova-2,
-    # measurably better WER on 8 kHz telephony audio.
-    # endpointing_ms = how much trailing silence before finalizing utterance.
-    # no_delay = emit final transcripts immediately (don't wait for smart-format).
+    # Sarvam Saaras v3 STT — streaming Indic-language ASR over WSS, with
+    # interim results and server-side VAD (the plugin's STTCapabilities
+    # advertises streaming=True + interim_results=True). Saaras v3 supports
+    # all 22 Indic languages plus en-IN and code-switching mid-utterance.
     #
-    # Keywords vs keyterms: Deepgram's nova-2 family takes `keywords=[...]`.
-    # nova-3 REJECTS that parameter and instead uses `keyterm=[...]`
-    # ("keyterm prompting"). Multilingual mode uses nova-3, so split the
-    # routing: keep `keywords` for nova-2 to preserve existing behavior; pass
-    # `keyterm` for nova-3. Without this guard, nova-3 raises ValueError at
-    # session start → call drops with just a ringtone before greeting plays.
-    asr_model = config.get("asr_model", DEFAULT_DG_MODEL)
-    asr_keywords = config.get("asr_keywords") or None
-    stt_kwargs: Dict[str, Any] = dict(
+    # mode="transcribe" — keeps the transcript in the caller's source language.
+    # The alternative `translate` mode would force English output, which would
+    # break Hindi/regional conversations (the LLM and TTS need to see the
+    # actual spoken language to reply in kind).
+    #
+    # language="unknown" for multilingual mode → Sarvam auto-detects per
+    # utterance across all 22 languages. Otherwise pin to the configured
+    # language code (e.g. "hi-IN", "en-IN") for tighter accuracy.
+    #
+    # Knobs that no longer apply (vs the old Deepgram path):
+    #   - endpointing_ms: Sarvam uses server-side VAD via positive/negative
+    #     speech-threshold params + frame counts, not a single ms knob.
+    #     Leaving plugin defaults; can tune later per-assistant if needed.
+    #   - keywords / keyterm: Sarvam does NOT support keyword biasing.
+    #     The field `asr_keywords` in Mongo is now inert.
+    #   - smart_format / no_delay: Sarvam handles these internally.
+    #
+    # high_vad_sensitivity=True biases toward catching short user replies
+    # ("haan", "okay") which matters for natural turn-taking on PSTN.
+    asr_model = config.get("asr_model") or DEFAULT_ASR_MODEL
+    asr_mode = config.get("asr_mode") or DEFAULT_ASR_MODE
+    asr_language = config.get("asr_language") or DEFAULT_ASR_LANGUAGE
+    stt = sarvam.STT(
         model=asr_model,
-        language=config.get("asr_language", "en"),
-        interim_results=True,
-        smart_format=True,
-        no_delay=True,
-        endpointing_ms=int(config.get("asr_endpointing_ms") or DEFAULT_DG_ENDPOINTING_MS),
+        mode=asr_mode,
+        language=asr_language,
+        high_vad_sensitivity=True,
     )
-    if asr_keywords:
-        if asr_model.startswith("nova-3"):
-            stt_kwargs["keyterm"] = asr_keywords
-        else:
-            stt_kwargs["keywords"] = asr_keywords
-    stt = deepgram.STT(**stt_kwargs)
 
-    # OpenAI LLM — token streaming (default in livekit-plugins-openai).
-    # max_completion_tokens hard-caps response length so a chatty turn can't
-    # blow past 120 tokens (~30s of speech). Without this, gpt-4o-mini drifts
-    # into 200+ token monologues that take >1.5s of LLM time + TTS cost.
+    # Sarvam LLM — token streaming (sarvam.LLM extends livekit-plugins-openai
+    # LLM with OpenAI-compatible chat completions against api.sarvam.ai/v1).
     #
-    # prompt_cache_key: OpenAI's explicit cache-key parameter. Setting this to
-    # the assistant_id makes BOTH the warmup call (in _warm_llm_cache) AND the
-    # real agent calls hit the same cache bucket — auto-cache key inference
-    # was unreliable because livekit's prompt format varied per call. With
-    # an explicit key, prompt_cached_tokens hits ~100% within the same
-    # assistant.
-    _cache_key = config.get("assistant_id") or "unknown-assistant"
-    llm = openai.LLM(
-        model=config.get("llm_model", "gpt-4o-mini"),
+    # max_tokens hard-caps response length so a chatty turn can't blow past
+    # ~30s of speech. The plugin forwards `max_tokens` via extra_body (Sarvam
+    # uses the legacy name, not OpenAI's newer max_completion_tokens).
+    #
+    # sarvam-105b runs in "thinking" mode by default — it emits
+    # <think>...</think> reasoning blocks before the actual answer, adding
+    # 2-5s of latency per turn. assistant_config.build_system_message()
+    # prepends "/nothink" at the very start of every system prompt to disable
+    # this. Without /nothink the agent is unusable for live voice calls.
+    #
+    # NOTE on prompt cache: Sarvam has no equivalent of OpenAI's
+    # prompt_cache_key, so the llm_cache_warmer.py background loop is dead
+    # code (removed). First-turn TTFT goes from ~500ms (cached gpt-4o-mini)
+    # to ~1.5-3s on sarvam-105b. Tradeoff accepted by product (full Indian
+    # stack, no Western fallback).
+    llm = sarvam.LLM(
+        model=config.get("llm_model") or "sarvam-105b",
         temperature=config.get("temperature", 0.7),
-        max_completion_tokens=int(config.get("llm_max_tokens") or DEFAULT_LLM_MAX_TOKENS),
-        prompt_cache_key=_cache_key,
+        max_tokens=int(config.get("llm_max_tokens") or DEFAULT_LLM_MAX_TOKENS),
     )
 
-    # TTS — provider chosen per-assistant. ElevenLabs (default) for English-
-    # heavy use cases, Cartesia Sonic when cost matters (Sonic-2 is ~5× cheaper
-    # at similar quality on English).
+    # TTS — Sarvam Bulbul (the only supported provider). Streams audio chunks
+    # over WSS as they synthesize.
     #
-    # If Cartesia is requested but the plugin isn't available, we fall back to
-    # ElevenLabs (and log loud) instead of raising — otherwise the call drops
-    # mid-INVITE before we can register the shutdown callback, leaving the
-    # call_log row stuck in 'initiating' state and triggering the polling loop
-    # that took down the API earlier today.
-    tts_provider = config.get("tts_provider", "elevenlabs")
-    if tts_provider == "cartesia" and _cartesia is None:
-        logger.error(
-            "[AGENT] tts_provider=cartesia requested but livekit-plugins-cartesia "
-            "is NOT installed in this image. Falling back to ElevenLabs. Fix the "
-            "image (pip install livekit-plugins-cartesia) and redeploy."
-        )
-        tts_provider = "elevenlabs"
-
-    if tts_provider == "cartesia":
-        # Cartesia plugin signature for 1.5.x:
-        #   cartesia.TTS(*, model, voice, language, speed, emotion, sample_rate, ...)
-        # Older builds (pre-1.5.0) didn't accept `language=` / `emotion=`. The
-        # retry below is purely a forward-compat safety net: if THIS Python image
-        # ships with an older plugin, default English calls without emotion
-        # still need to succeed — we ALWAYS strip-and-retry on TypeError instead
-        # of gating on "is this non-default."  (Earlier code gated on
-        # `language != "en"`, which broke default-English calls on older
-        # plugins; QA found that one.)
-        cart_kwargs: Dict[str, Any] = {
-            "model": config.get("tts_model", "sonic-3"),
-            "speed": config.get("tts_speed", 1.0),
-            "language": config.get("tts_language") or "en",
-            # Latency tuning (vs Cartesia plugin defaults):
-            #   sample_rate=16000 instead of 24000 → half the bytes-over-wire
-            #   to the agent, fewer downsample cycles before LiveKit hands the
-            #   audio to the SIP leg (which is 8kHz μ-law). 16kHz is still
-            #   well above PSTN's effective bandwidth so quality is unchanged.
-            #   Saves an estimated 10-30ms TTFB and lowers steady-state CPU.
-            #
-            #   word_timestamps=False (plugin default is True). Per-word
-            #   timestamp metadata is shipped on the WSS stream by default,
-            #   but ConvisAgent never consumes word timestamps — they're free
-            #   parsing overhead. Saves an estimated 5-15ms TTFB.
-            "sample_rate": 16000,
-            "word_timestamps": False,
-        }
-        # Cartesia sonic-3 accepts a SINGLE emotion (string or 1-element list).
-        # `tts_emotion` is normalized by _coerce_tts_emotion to either []  or
-        # a list of length 1 in the canonical Title-Case form.
-        cart_emotion = config.get("tts_emotion") or []
-        if cart_emotion:
-            cart_kwargs["emotion"] = cart_emotion
-
-        def _build_cartesia(extra_kwargs: Dict[str, Any]):
-            """Build a cartesia.TTS, tolerating both `voice=` (modern) and
-            `voice_id=` (legacy). Raises TypeError if BOTH signatures reject."""
-            try:
-                return _cartesia.TTS(voice=config.get("tts_voice"), **extra_kwargs)
-            except TypeError:
-                return _cartesia.TTS(voice_id=config.get("tts_voice"), **extra_kwargs)
-
-        # `actual_kwargs` tracks what the plugin REALLY accepted, so the log line
-        # below reports the truth instead of what we wanted to pass.
-        actual_kwargs: Dict[str, Any] = cart_kwargs
-        # Latency-tuning kwargs are also part of the "post-1.5.0" set — strip
-        # them if the plugin's signature rejects anything. The retry walk is:
-        # full → drop latency tuning → drop emotion/language → ElevenLabs.
-        try:
-            tts = _build_cartesia(cart_kwargs)
-        except TypeError as e:
-            logger.warning(
-                "[AGENT] Cartesia TTS rejected kwargs (%s) — retrying without "
-                "latency-tuning knobs (sample_rate / word_timestamps).", e,
-            )
-            stripped_latency = {k: v for k, v in cart_kwargs.items()
-                                if k not in ("sample_rate", "word_timestamps")}
-            try:
-                tts = _build_cartesia(stripped_latency)
-                actual_kwargs = stripped_latency
-            except TypeError as e2:
-                logger.warning(
-                    "[AGENT] Cartesia TTS still rejecting kwargs (%s) — "
-                    "retrying minimal (no emotion/language/latency).", e2,
-                )
-                stripped_all = {k: v for k, v in cart_kwargs.items()
-                                if k not in ("emotion", "language",
-                                             "sample_rate", "word_timestamps")}
-                try:
-                    tts = _build_cartesia(stripped_all)
-                    actual_kwargs = stripped_all
-                except TypeError:
-                    logger.exception(
-                        "[AGENT] Cartesia TTS rejected both voice= and "
-                        "voice_id= after stripping all optional kwargs. "
-                        "Falling back to ElevenLabs."
-                    )
-                    tts_provider = "elevenlabs"  # signal fallthrough
-        if tts_provider == "cartesia":
-            logger.info(
-                "[AGENT] TTS=Cartesia model=%s voice=%s lang=%s emotion=%s speed=%s",
-                actual_kwargs.get("model"), config.get("tts_voice"),
-                actual_kwargs.get("language") or "—",
-                actual_kwargs.get("emotion") or "—",
-                actual_kwargs.get("speed"),
-            )
-
-    if tts_provider == "elevenlabs":
-        # ElevenLabs Flash v2.5 streams audio chunks as they synthesize.
-        # stability=0.3 is deliberate: at the default 0.5 the prosody model over-
-        # extends vowels on uncommon / non-English names ("Shubham" → "shuuuubham"),
-        # because high stability biases toward consistent prosody over text fidelity.
-        # 0.3 is the lowest value that still sounds natural for sustained speech.
-        #
-        # Voice/model fallback: if we fell BACK to ElevenLabs because Cartesia
-        # was unavailable, the assistant's tts_voice/tts_model fields are
-        # Cartesia values (UUID + 'sonic-2') which ElevenLabs can't use.
-        # Detect that case (voice contains '-', model starts with 'sonic-')
-        # and substitute the ElevenLabs default Rachel + flash_v2_5.
-        eleven_voice = config.get("tts_voice") or "21m00Tcm4TlvDq8ikWAM"
-        eleven_model = config.get("tts_model") or "eleven_flash_v2_5"
-        if "-" in eleven_voice or eleven_model.startswith("sonic"):
-            logger.warning(
-                "[AGENT] Voice/model %s/%s look like Cartesia values but provider "
-                "fell back to ElevenLabs — substituting Rachel + eleven_flash_v2_5",
-                eleven_voice, eleven_model,
-            )
-            eleven_voice = "21m00Tcm4TlvDq8ikWAM"
-            eleven_model = "eleven_flash_v2_5"
-        tts = elevenlabs.TTS(
-            voice_id=eleven_voice,
-            model=eleven_model,
-            voice_settings=elevenlabs.VoiceSettings(
-                stability=config.get("tts_stability", 0.3),
-                similarity_boost=config.get("tts_similarity_boost", 0.75),
-                style=config.get("tts_style", 0.0),
-                speed=config.get("tts_speed", 1.0),
-            ),
-        )
-        logger.info("[AGENT] TTS=ElevenLabs model=%s voice=%s",
-                    config.get("tts_model"), config.get("tts_voice"))
+    # Default model bulbul:v3 with default speaker "shubh" (male Hindi). v3
+    # is the streaming-capable flagship; livekit-plugins-sarvam 1.5.12
+    # correctly sends temperature + omits pitch/loudness for v3.
+    #
+    # v3 has a different speaker catalogue than v2 — anushka/manisha/vidya/
+    # arya/abhilash/karun/hitesh are v2-ONLY and will raise ValueError on
+    # v3 init. assistant_config._coerce_tts_voice enforces per-model
+    # compatibility (anushka+v3 → shubh, pooja+v2 → anushka, etc.) so a
+    # stale Mongo doc can't crash the agent here.
+    #
+    # `tts_speed` from Mongo maps to Sarvam's `pace` (1.0 default).
+    # enable_preprocessing is v2-only inside the plugin (silently ignored on
+    # v3) so leaving it True is harmless for the default path.
+    tts = sarvam.TTS(
+        target_language_code=config.get("tts_language") or "en-IN",
+        model=config.get("tts_model") or "bulbul:v3",
+        speaker=config.get("tts_voice") or "shubh",
+        speech_sample_rate=22050,
+        pace=float(config.get("tts_speed", 1.0)),
+        enable_preprocessing=True,
+        output_audio_codec="mp3",
+    )
+    logger.info(
+        "[AGENT] TTS=Sarvam model=%s speaker=%s lang=%s pace=%s",
+        config.get("tts_model") or "bulbul:v3",
+        config.get("tts_voice") or "shubh",
+        config.get("tts_language") or "en-IN",
+        config.get("tts_speed", 1.0),
+    )
 
     # Silero VAD — prewarmed if possible.
     vad = _get_vad(ctx)
@@ -1214,6 +1207,26 @@ async def entrypoint(ctx: JobContext) -> None:
         except Exception:
             logger.debug("[METRICS] unable to format event", exc_info=True)
 
+    # ── Agent-state mirror for LLM-aware idle watchdog ─────────────────────
+    # AgentSession transitions through initializing → idle → listening →
+    # thinking → speaking → idle (per turn). When the LLM is streaming a
+    # response, state is "thinking" — and TTS hasn't started yet because
+    # AgentSession's sentence tokenizer buffers tokens until a sentence
+    # boundary. The idle watchdog only resets on TTSMetrics / EOUMetrics
+    # / STTMetrics-with-audio, so during a slow "thinking" phase (observed
+    # 15-20s on sarvam-105b "explain X" prompts) the watchdog could fire
+    # and cancel the in-flight LLM response. Mirroring state here lets the
+    # watchdog suppress its check while the agent is actively working.
+    @session.on("agent_state_changed")
+    def _on_agent_state(ev: Any) -> None:
+        try:
+            new_state = getattr(ev, "new_state", None)
+            if isinstance(new_state, str):
+                agent._agent_state = new_state
+                logger.debug("[AGENT] state → %s", new_state)
+        except Exception:
+            logger.debug("[AGENT] failed to read agent_state_changed event", exc_info=True)
+
     # ── Mark call_log completed when the room ends ──────────────────────────
     # Without this hook, every call stays "initiated" in Mongo forever and the
     # frontend keeps polling /call-status, eventually saturating the API
@@ -1338,16 +1351,13 @@ async def entrypoint(ctx: JobContext) -> None:
 
     # Greeting via session.say(): goes straight to TTS, bypassing the LLM.
     # Saves the LLM round-trip on greeting (~300-500ms) AND makes greeting
-    # deterministic — no risk of gpt-4o-mini "creatively" rephrasing the
-    # configured greeting.
+    # deterministic — no risk of the LLM "creatively" rephrasing the configured
+    # greeting.
     #
-    # CONCURRENT LLM WARMUP: while the greeting plays, fire a tiny dummy LLM
-    # call with the assistant's full system prompt. That populates OpenAI's
-    # prompt cache (gpt-4o-mini caches ~3000+ token prefixes for ~5 min). By
-    # the time the user finishes their first utterance, the prompt is cached
-    # → first-turn LLM TTFT drops from ~2s (cold) to ~200-400ms (warm cache).
-    # This was the dominant first-turn lag before — see logs showing
-    # prompt_cached_tokens=0 / duration=1.9s on turn 1, 3328/1.06s on turn 2.
+    # No LLM cache warmup: Sarvam has no equivalent of OpenAI's prompt_cache_key,
+    # so the concurrent warmup task that used to fire here is gone. First-turn
+    # TTFT pays the full prompt-processing cost (~1.5-3s on sarvam-105b with
+    # /nothink) every cold call. Mitigations are prompt trimming, not warming.
     greeting = config.get("greeting") or "Hello! How can I help you today?"
     if config.get("resumed_after_failed_transfer"):
         # We got here because a transfer to a human didn't connect (no-answer/
@@ -1358,51 +1368,7 @@ async def entrypoint(ctx: JobContext) -> None:
             "I'm sorry, I wasn't able to reach a team member right now. "
             "Is there anything else I can help you with?"
         )
-    asyncio.create_task(_warm_llm_cache(config, logger))
     await session.say(greeting, allow_interruptions=True)
-
-
-async def _warm_llm_cache(config: Dict[str, Any], _logger: logging.Logger) -> None:
-    """Fire a tiny LLM call with the assistant's system prompt to warm OpenAI's
-    prompt cache. Best-effort — never blocks or surfaces errors. Runs concurrent
-    with greeting playback. Total cost: 1 input prompt (cached), 1 output token.
-
-    Uses an explicit prompt_cache_key=assistant_id so this warmup hits the same
-    cache bucket as the agent's real LLM calls (which also pass the same
-    prompt_cache_key, see openai.LLM(...) above). Without an explicit key,
-    OpenAI's auto-inference of cache keys was unreliable across the bare-SDK
-    warmup vs livekit's wrapped chat() format → cache misses.
-    """
-    try:
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI()
-        system_msg = config.get("system_message") or ""
-        if not system_msg:
-            return
-        cache_key = config.get("assistant_id") or "unknown-assistant"
-        # Send prompt_cache_key as the NATIVE openai SDK parameter (not via
-        # extra_body). The agent's openai.LLM(prompt_cache_key=...) uses the
-        # native param too — sending via extra_body lands the request on a
-        # different code path inside the SDK, producing a different request
-        # fingerprint, so OpenAI routes it to a different cache shard than
-        # the agent's calls. Confirmed in production logs: every turn showed
-        # prompt_cached_tokens=0 even though the warmer ran successfully.
-        await client.chat.completions.create(
-            model=config.get("llm_model", "gpt-4o-mini"),
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": "."},
-            ],
-            max_completion_tokens=1,
-            temperature=0.0,
-            prompt_cache_key=cache_key,
-        )
-        _logger.info(
-            "[AGENT] LLM cache warmed (system prompt: %d chars, cache_key=%s)",
-            len(system_msg), cache_key,
-        )
-    except Exception:
-        _logger.warning("[AGENT] LLM cache warmup skipped", exc_info=True)
 
 
 if __name__ == "__main__":

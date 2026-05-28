@@ -268,13 +268,13 @@ const LANGUAGE_OPTIONS = [
   { value: 'tr', label: 'Turkish (Türkçe)', flag: '🇹🇷' },
 ];
 
-// ElevenLabs voices - mapped from provider-config.ts
-const VOICE_OPTIONS: VoiceOption[] = ENHANCED_TTS_VOICES.elevenlabs.map(v => ({
+// Sarvam Bulbul voices - mapped from provider-config.ts (TTS migration 2026-05-23)
+const VOICE_OPTIONS: VoiceOption[] = ENHANCED_TTS_VOICES.sarvam.map(v => ({
   value: v.value,
-  label: v.label.split(' - ')[0], // Just the name
+  label: v.label.split(' — ')[0], // Just the name
   gender: v.gender === 'female' ? 'Female' : v.gender === 'male' ? 'Male' : 'Neutral',
   accent: v.accent,
-  description: v.label.split(' - ')[1] || v.accent,
+  description: v.label.split(' — ')[1] || v.accent,
 }));
 
 // ASR Provider Models from provider-config.ts (imported as ENHANCED_ASR_MODELS)
@@ -317,7 +317,7 @@ const ASSISTANT_TEMPLATES: AssistantTemplate[] = [
     description: 'Handle customer inquiries, provide support, and resolve issues professionally',
     icon: '💬',
     system_message: 'You are a professional and friendly customer support agent. Your goal is to help customers resolve their issues efficiently while maintaining a positive and empathetic tone. Always listen carefully to their concerns, provide clear solutions, and ensure customer satisfaction.',
-    voice: 'EXAVITQu4vr4xnSDxMaL',
+    voice: 'shubh',
     temperature: 0.7,
     color: 'from-blue-500 to-blue-600',
   },
@@ -327,7 +327,7 @@ const ASSISTANT_TEMPLATES: AssistantTemplate[] = [
     description: 'Engage prospects, answer questions, and drive sales conversations',
     icon: '💼',
     system_message: 'You are a knowledgeable and persuasive sales assistant. Your role is to understand customer needs, present product benefits effectively, handle objections professionally, and guide prospects through the sales process. Be consultative, not pushy.',
-    voice: 'FGY2WhTYpPnrIDTdsKH5',
+    voice: 'aditya',
     temperature: 0.7,
     color: 'from-green-500 to-green-600',
   },
@@ -337,7 +337,7 @@ const ASSISTANT_TEMPLATES: AssistantTemplate[] = [
     description: 'Book appointments, manage calendars, and send reminders',
     icon: '📅',
     system_message: 'You are an efficient appointment scheduling assistant. Help users book, reschedule, and manage appointments. Check availability, confirm details, send reminders, and ensure smooth scheduling. Be organized and detail-oriented.',
-    voice: 'cgSgspJ2msm6clMCkdW9',
+    voice: 'priya',
     temperature: 0.5,
     color: 'from-purple-500 to-purple-600',
   },
@@ -347,7 +347,7 @@ const ASSISTANT_TEMPLATES: AssistantTemplate[] = [
     description: 'Qualify leads by asking relevant questions and gathering information',
     icon: '🎯',
     system_message: 'You are a lead qualification specialist. Ask targeted questions to understand prospect needs, budget, timeline, and decision-making process. Gather essential information to determine if the lead is qualified. Be professional and conversational.',
-    voice: 'CwhRBWXzGAHq8TQ4Fs17',
+    voice: 'rahul',
     temperature: 0.6,
     color: 'from-orange-500 to-orange-600',
   },
@@ -357,7 +357,7 @@ const ASSISTANT_TEMPLATES: AssistantTemplate[] = [
     description: 'Greet callers, route calls, and provide basic information',
     icon: '📞',
     system_message: 'You are a professional virtual receptionist. Greet callers warmly, understand their needs, provide information about the company, and route calls appropriately. Handle inquiries efficiently while maintaining a friendly demeanor.',
-    voice: 'TX3LPaxmHKxFdv7VOQHJ',
+    voice: 'neha',
     temperature: 0.6,
     color: 'from-pink-500 to-pink-600',
   },
@@ -367,7 +367,7 @@ const ASSISTANT_TEMPLATES: AssistantTemplate[] = [
     description: 'Gather customer feedback and conduct satisfaction surveys',
     icon: '⭐',
     system_message: 'You are a feedback collection specialist. Conduct surveys, gather customer opinions, and collect testimonials. Ask thoughtful questions, encourage honest feedback, and make the process enjoyable. Be appreciative and non-intrusive.',
-    voice: 'Xb7hH8MSUJpSbSDYk0k2',
+    voice: 'kavya',
     temperature: 0.7,
     color: 'from-yellow-500 to-yellow-600',
   },
@@ -425,7 +425,7 @@ export default function AIAgentPage() {
   const [formData, setFormData] = useState({
     name: '',
     system_message: '',
-    voice: 'EXAVITQu4vr4xnSDxMaL',
+    voice: 'shubh',
     voice_mode: 'custom' as 'realtime' | 'custom',
     temperature: 0.4,
     api_key_id: '',
@@ -433,15 +433,16 @@ export default function AIAgentPage() {
     calendar_account_id: '',
     calendar_account_ids: [] as string[],
     calendar_enabled: false,
-    asr_provider: 'deepgram',
-    tts_provider: 'elevenlabs',
-    asr_model: 'nova-2-phonecall',
-    asr_language: 'en',
-    tts_voice: 'EXAVITQu4vr4xnSDxMaL',
-    tts_model: 'eleven_flash_v2_5',
+    asr_provider: 'sarvam',
+    tts_provider: 'sarvam',
+    asr_model: 'saaras:v3',
+    asr_language: 'en-IN',
+    tts_voice: 'shubh',
+    tts_model: 'bulbul:v3',
     tts_speed: 1.0,
-    // Cartesia-only — ignored when tts_provider === 'elevenlabs'.
-    tts_language: 'en',
+    // Sarvam Bulbul language (BCP-47, India-locale). tts_emotion is a no-op
+    // after the Sarvam migration but kept in the form shape for compatibility.
+    tts_language: 'en-IN',
     tts_emotion: [] as string[],
     expressive_mode: false,
     multilingual: false,
@@ -454,8 +455,8 @@ export default function AIAgentPage() {
     conversation_history_enabled: false,
     conversation_history_max_calls: 3,
     audio_buffer_size: 200,
-    llm_provider: 'openai',
-    llm_model: 'gpt-4o-mini',
+    llm_provider: 'sarvam',
+    llm_model: 'sarvam-105b',
     llm_max_tokens: 250,
     bot_language: 'en',
     noise_suppression_level: 'medium',
@@ -511,12 +512,27 @@ export default function AIAgentPage() {
   const toast = useToast();
 
   // Get unique accents for filter
-  // Use dynamic voice list when fetched, fall back to the hardcoded
-  // ElevenLabs catalogue if the API hasn't loaded yet (or fetch failed).
+  // Sarvam Bulbul voice list, filtered to voices compatible with the currently
+  // selected Bulbul model. v2 voices (anushka, manisha, vidya, arya, abhilash,
+  // karun, hitesh) are NOT valid on v3 — sending a v2-only speaker to
+  // sarvam.TTS(model="bulbul:v3", ...) raises ValueError at instantiation, so
+  // we filter client-side too. Each ENHANCED_TTS_VOICES.sarvam entry has a
+  // `model` field tagging which Bulbul version supports it; v3-beta voices
+  // are presented in the v3 set for picker convenience.
   const activeVoiceList = useMemo<VoiceOption[]>(() => {
     if (dynamicVoices.length > 0) return dynamicVoices;
-    return (formData.tts_provider || 'elevenlabs') === 'elevenlabs' ? VOICE_OPTIONS : [];
-  }, [dynamicVoices, formData.tts_provider]);
+    const selectedModel = formData.tts_model || 'bulbul:v3';
+    return VOICE_OPTIONS.filter(v => {
+      const voiceModel = (v as VoiceOption & { model?: string }).model;
+      // Untagged voices fall back to showing on every model (defensive — the
+      // current Sarvam catalogue tags every entry, so this branch is
+      // effectively dead until a future entry omits the model field).
+      if (!voiceModel) return true;
+      if (selectedModel === 'bulbul:v2') return voiceModel === 'bulbul:v2';
+      // v3 / v3-beta — show both v3 and v3-beta voices.
+      return voiceModel === 'bulbul:v3' || voiceModel === 'bulbul:v3-beta';
+    });
+  }, [dynamicVoices, formData.tts_model]);
 
   const uniqueAccents = useMemo(() => {
     const accents = new Set(activeVoiceList.map(v => v.accent));
@@ -539,7 +555,7 @@ export default function AIAgentPage() {
   // ElevenLabs / Cartesia account, not just a hardcoded subset.
   useEffect(() => {
     let cancelled = false;
-    const provider = (formData.tts_provider || 'elevenlabs');
+    const provider = (formData.tts_provider || 'sarvam');
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
     setLoadingVoices(true);
     fetch(`${API_URL}/api/voices/list?provider=${encodeURIComponent(provider)}`, {
@@ -933,19 +949,19 @@ export default function AIAgentPage() {
             calendar_account_ids: formData.calendar_account_ids,
             calendar_enabled: formData.calendar_enabled,
             // Hardcoded providers — no user selection
-            asr_provider: 'deepgram',
-            asr_model: 'nova-2-phonecall',
-            asr_language: 'en',
-            tts_provider: formData.tts_provider || 'elevenlabs',
-            tts_model: formData.tts_model || (formData.tts_provider === 'cartesia' ? 'sonic-3' : 'eleven_flash_v2_5'),
+            asr_provider: 'sarvam',
+            asr_model: 'saaras:v3',
+            asr_language: 'en-IN',
+            tts_provider: formData.tts_provider || 'sarvam',
+            tts_model: formData.tts_model || 'bulbul:v3',
             tts_voice: formData.tts_voice || formData.voice,
             // Cartesia-only knobs. Always sent (server ignores them on ElevenLabs);
             // NEVER hardcode — formData is the source of truth (see CLAUDE.md
             // hardcode-clobber history).
-            tts_language: formData.tts_language || 'en',
+            tts_language: formData.tts_language || 'en-IN',
             tts_emotion: formData.tts_emotion || [],
-            llm_provider: 'openai',
-            llm_model: formData.llm_model || 'gpt-4o-mini',
+            llm_provider: 'sarvam',
+            llm_model: formData.llm_model || 'sarvam-105b',
             llm_max_tokens: formData.llm_max_tokens ?? 250,
             bot_language: formData.bot_language,
             noise_suppression_level: formData.noise_suppression_level || 'medium',
@@ -1026,19 +1042,19 @@ export default function AIAgentPage() {
             calendar_account_ids: formData.calendar_account_ids,
             calendar_enabled: formData.calendar_enabled,
             // Hardcoded providers — no user selection
-            asr_provider: 'deepgram',
-            asr_model: 'nova-2-phonecall',
-            asr_language: 'en',
-            tts_provider: formData.tts_provider || 'elevenlabs',
-            tts_model: formData.tts_model || (formData.tts_provider === 'cartesia' ? 'sonic-3' : 'eleven_flash_v2_5'),
+            asr_provider: 'sarvam',
+            asr_model: 'saaras:v3',
+            asr_language: 'en-IN',
+            tts_provider: formData.tts_provider || 'sarvam',
+            tts_model: formData.tts_model || 'bulbul:v3',
             tts_voice: formData.tts_voice || formData.voice,
             // Cartesia-only knobs. Always sent (server ignores them on ElevenLabs);
             // NEVER hardcode — formData is the source of truth (see CLAUDE.md
             // hardcode-clobber history).
-            tts_language: formData.tts_language || 'en',
+            tts_language: formData.tts_language || 'en-IN',
             tts_emotion: formData.tts_emotion || [],
-            llm_provider: 'openai',
-            llm_model: formData.llm_model || 'gpt-4o-mini',
+            llm_provider: 'sarvam',
+            llm_model: formData.llm_model || 'sarvam-105b',
             llm_max_tokens: formData.llm_max_tokens ?? 250,
             bot_language: formData.bot_language,
             noise_suppression_level: formData.noise_suppression_level || 'medium',
@@ -1119,7 +1135,7 @@ export default function AIAgentPage() {
       setFormData({
         name: '',
         system_message: '',
-        voice: 'EXAVITQu4vr4xnSDxMaL',
+        voice: 'shubh',
         voice_mode: 'custom',
         temperature: 0.4,
         api_key_id: '',
@@ -1127,12 +1143,12 @@ export default function AIAgentPage() {
         calendar_account_id: '',
         calendar_account_ids: [] as string[],
         calendar_enabled: false,
-        asr_provider: 'deepgram',
-        tts_provider: 'elevenlabs',
-        asr_model: 'nova-2-phonecall',
-        asr_language: 'en',
-        tts_voice: 'EXAVITQu4vr4xnSDxMaL',
-        tts_model: 'eleven_flash_v2_5',
+        asr_provider: 'sarvam',
+        tts_provider: 'sarvam',
+        asr_model: 'saaras:v3',
+        asr_language: 'en-IN',
+        tts_voice: 'shubh',
+        tts_model: 'bulbul:v3',
         tts_speed: 1.0,
         tts_language: 'en',
         tts_emotion: [] as string[],
@@ -1146,8 +1162,8 @@ export default function AIAgentPage() {
         conversation_history_enabled: false,
         conversation_history_max_calls: 3,
         audio_buffer_size: 200,
-        llm_provider: 'openai',
-        llm_model: 'gpt-4o-mini',
+        llm_provider: 'sarvam',
+        llm_model: 'sarvam-105b',
         llm_max_tokens: 250,
         bot_language: 'en',
         noise_suppression_level: 'medium',
@@ -1216,7 +1232,7 @@ export default function AIAgentPage() {
       setAudioElement(null);
       return;
     }
-    const provider = (formData.tts_provider || 'elevenlabs');
+    const provider = (formData.tts_provider || 'sarvam');
     const resolvedUserId = user?.clientId || user?._id || user?.id;
     if (!resolvedUserId) {
       toast.error('User session not loaded — refresh and try again.');
@@ -1237,7 +1253,10 @@ export default function AIAgentPage() {
           voice_id: voiceId,
           text: demoText,
           user_id: resolvedUserId,
-          model: provider === 'cartesia' ? 'sonic-3' : 'eleven_turbo_v2_5',
+          // Sarvam preview uses bulbul:v3 by default; the language is read
+          // from the assistant's tts_language (defaults en-IN server-side).
+          model: formData.tts_model || 'bulbul:v3',
+          language: formData.tts_language || 'en-IN',
         }),
       });
       if (!resp.ok) {
@@ -1664,7 +1683,7 @@ export default function AIAgentPage() {
     setFormData({
       name: '',
       system_message: '',
-      voice: 'EXAVITQu4vr4xnSDxMaL',
+      voice: 'shubh',
       voice_mode: 'custom',
       temperature: 0.4,
       api_key_id: '',
@@ -1672,20 +1691,29 @@ export default function AIAgentPage() {
       calendar_account_id: '',
       calendar_account_ids: [] as string[],
       calendar_enabled: false,
-      asr_provider: 'deepgram',
-      tts_provider: 'elevenlabs',
-      asr_model: 'nova-2-phonecall',
-      asr_language: 'en',
-      tts_voice: 'EXAVITQu4vr4xnSDxMaL',
-      tts_model: 'eleven_flash_v2_5',
+      asr_provider: 'sarvam',
+      tts_provider: 'sarvam',
+      asr_model: 'saaras:v3',
+      asr_language: 'en-IN',
+      tts_voice: 'shubh',
+      tts_model: 'bulbul:v3',
       tts_speed: 1.0,
       tts_language: 'en',
       tts_emotion: [] as string[],
       expressive_mode: false,
-    multilingual: false,
+      multilingual: false,
+      // Call transfer to a human agent (must be present so setFormData's
+      // object literal satisfies the full form-state type).
+      call_transfer_enabled: false,
+      call_transfer_number: '',
+      call_transfer_message: '',
+      call_transfer_conditions: '',
+      // Conversation memory across calls.
+      conversation_history_enabled: false,
+      conversation_history_max_calls: 3,
       audio_buffer_size: 200,
-      llm_provider: 'openai',
-      llm_model: 'gpt-4o-mini',
+      llm_provider: 'sarvam',
+      llm_model: 'sarvam-105b',
       llm_max_tokens: 250,
       bot_language: 'en',
       noise_suppression_level: 'medium',
@@ -1705,20 +1733,20 @@ export default function AIAgentPage() {
   };
 
   const openEditModal = async (assistant: AIAssistant) => {
-    const asr = assistant.asr_provider || 'deepgram';
-    const tts = assistant.tts_provider || 'elevenlabs';
-    const llmProvider = assistant.llm_provider || 'openai';
+    const asr = assistant.asr_provider || 'sarvam';
+    const tts = assistant.tts_provider || 'sarvam';
+    const llmProvider = assistant.llm_provider || 'sarvam';
     const llmModel =
       assistant.llm_model ||
-      (ENHANCED_LLM_MODELS[llmProvider as keyof typeof ENHANCED_LLM_MODELS]?.[0]?.value || 'gpt-4o-mini');
+      (ENHANCED_LLM_MODELS[llmProvider as keyof typeof ENHANCED_LLM_MODELS]?.[0]?.value || 'sarvam-105b');
     const llmMaxTokens = assistant.llm_max_tokens ?? 250;
 
     // Set default models/voices based on provider
-    const defaultAsrModel = ASR_MODELS[asr as keyof typeof ASR_MODELS]?.[0]?.value || 'nova-2';
+    const defaultAsrModel = ASR_MODELS[asr as keyof typeof ASR_MODELS]?.[0]?.value || 'saaras:v3';
     const defaultTtsVoice = TTS_VOICES[tts as keyof typeof TTS_VOICES]?.[0]?.value || assistant.voice;
-    const defaultTtsModel = TTS_MODELS[tts as keyof typeof TTS_MODELS]?.[0]?.value || 'eleven_flash_v2_5';
+    const defaultTtsModel = TTS_MODELS[tts as keyof typeof TTS_MODELS]?.[0]?.value || 'bulbul:v3';
     const asrModel = assistant.asr_model || defaultAsrModel;
-    const asrLanguage = assistant.asr_language || 'en';
+    const asrLanguage = assistant.asr_language || 'en-IN';
     const ttsVoice = assistant.tts_voice || defaultTtsVoice;
     const ttsModel = assistant.tts_model || defaultTtsModel;
 
@@ -1832,20 +1860,29 @@ export default function AIAgentPage() {
       calendar_account_id: '',
       calendar_account_ids: [] as string[],
       calendar_enabled: false,
-      asr_provider: 'deepgram',
-      tts_provider: 'elevenlabs',
-      asr_model: 'nova-2-phonecall',
-      asr_language: 'en',
+      asr_provider: 'sarvam',
+      tts_provider: 'sarvam',
+      asr_model: 'saaras:v3',
+      asr_language: 'en-IN',
       tts_voice: template.voice,
-      tts_model: 'eleven_flash_v2_5',
+      tts_model: 'bulbul:v3',
       tts_speed: 1.0,
       tts_language: 'en',
       tts_emotion: [] as string[],
       expressive_mode: false,
-    multilingual: false,
+      multilingual: false,
+      // Call transfer to a human agent (must be present so setFormData's
+      // object literal satisfies the full form-state type).
+      call_transfer_enabled: false,
+      call_transfer_number: '',
+      call_transfer_message: '',
+      call_transfer_conditions: '',
+      // Conversation memory across calls.
+      conversation_history_enabled: false,
+      conversation_history_max_calls: 3,
       audio_buffer_size: 200,
-      llm_provider: 'openai',
-      llm_model: 'gpt-4o-mini',
+      llm_provider: 'sarvam',
+      llm_model: 'sarvam-105b',
       llm_max_tokens: 250,
       bot_language: 'en',
       noise_suppression_level: 'medium',
@@ -1869,7 +1906,7 @@ export default function AIAgentPage() {
     setFormData({
       name: '',
       system_message: '',
-      voice: 'EXAVITQu4vr4xnSDxMaL',
+      voice: 'shubh',
       voice_mode: 'custom',
       temperature: 0.4,
       api_key_id: '',
@@ -1877,20 +1914,29 @@ export default function AIAgentPage() {
       calendar_account_id: '',
       calendar_account_ids: [] as string[],
       calendar_enabled: false,
-      asr_provider: 'deepgram',
-      tts_provider: 'elevenlabs',
-      asr_model: 'nova-2-phonecall',
-      asr_language: 'en',
-      tts_voice: 'EXAVITQu4vr4xnSDxMaL',
-      tts_model: 'eleven_flash_v2_5',
+      asr_provider: 'sarvam',
+      tts_provider: 'sarvam',
+      asr_model: 'saaras:v3',
+      asr_language: 'en-IN',
+      tts_voice: 'shubh',
+      tts_model: 'bulbul:v3',
       tts_speed: 1.0,
       tts_language: 'en',
       tts_emotion: [] as string[],
       expressive_mode: false,
-    multilingual: false,
+      multilingual: false,
+      // Call transfer to a human agent (must be present so setFormData's
+      // object literal satisfies the full form-state type).
+      call_transfer_enabled: false,
+      call_transfer_number: '',
+      call_transfer_message: '',
+      call_transfer_conditions: '',
+      // Conversation memory across calls.
+      conversation_history_enabled: false,
+      conversation_history_max_calls: 3,
       audio_buffer_size: 200,
-      llm_provider: 'openai',
-      llm_model: 'gpt-4o-mini',
+      llm_provider: 'sarvam',
+      llm_model: 'sarvam-105b',
       llm_max_tokens: 250,
       bot_language: 'en',
       noise_suppression_level: 'medium',
@@ -2000,9 +2046,9 @@ export default function AIAgentPage() {
         llm_model: assistant.llm_model,
         llm_max_tokens: assistant.llm_max_tokens,
         enable_precise_transcript: assistant.enable_precise_transcript,
-        enable_ambient_sound: assistant.enable_ambient_sound,
-        ambient_sound_type: assistant.ambient_sound_type,
-        ambient_sound_volume: assistant.ambient_sound_volume,
+        // ambient_sound_* fields removed — they were never in the AIAssistant
+        // type and the feature isn't wired up. Re-add to the type if the
+        // feature comes back.
         enable_interruption: assistant.enable_interruption,
         enable_realtime_mode: assistant.enable_realtime_mode,
         // Note: We don't copy knowledge_base_files, calendar settings, or API keys
@@ -2724,135 +2770,74 @@ export default function AIAgentPage() {
                   ))}
                 </div>
               </div>
-              {/* TTS Provider toggle — ElevenLabs (premium quality) vs Cartesia
-                  Sonic-2 (~5× cheaper at similar English quality). Voice IDs are
-                  per-provider so we swap defaults when the user toggles. */}
-              <div>
-                <label className={`block text-sm font-medium ${isDarkMode ? 'text-white' : 'text-neutral-dark'} mb-3`}>
-                  TTS Provider
+              {/* TTS configuration — Sarvam Bulbul only (post-migration 2026-05-23).
+                  No provider toggle: Convis-India is locked to Sarvam. Two
+                  Sarvam-native knobs are exposed: output language (Bulbul's
+                  11 BCP-47 Indic codes) and the Bulbul model (v3 default, v2
+                  available for assistants that need v2-only voices like
+                  anushka). The voice picker further below filters per model. */}
+              <div className={`mb-6 p-4 rounded-xl border ${isDarkMode ? 'border-gray-700 bg-gray-800' : 'border-neutral-light bg-white'}`}>
+                <p className={`text-sm font-semibold mb-1 ${isDarkMode ? 'text-white' : 'text-neutral-dark'}`}>
+                  TTS — Sarvam Bulbul
+                </p>
+                <p className={`text-xs mb-4 ${isDarkMode ? 'text-gray-400' : 'text-neutral-mid'}`}>
+                  Indic-tuned text-to-speech. Pick the output language and Bulbul model — the voice picker below will filter to compatible speakers.
+                </p>
+
+                <label className={`block text-xs font-medium mb-1 ${isDarkMode ? 'text-gray-300' : 'text-neutral-dark'}`}>
+                  Output language
                 </label>
-                <div className="grid grid-cols-2 gap-3 mb-6">
-                  {([
-                    { id: 'elevenlabs', name: 'ElevenLabs', desc: 'Premium voice quality', defaultModel: 'eleven_flash_v2_5', defaultVoice: 'EXAVITQu4vr4xnSDxMaL' },
-                    { id: 'cartesia', name: 'Cartesia Sonic', desc: '~5× cheaper, fast', defaultModel: 'sonic-3', defaultVoice: '694f9389-aac1-45b6-b726-9d9369183238' },
-                  ] as const).map(p => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      onClick={() => setFormData({
-                        ...formData,
-                        tts_provider: p.id,
-                        tts_model: p.defaultModel,
-                        tts_voice: p.defaultVoice,
-                        voice: p.defaultVoice,
-                      })}
-                      className={`p-3 rounded-xl border-2 text-left transition-all ${
-                        (formData.tts_provider || 'elevenlabs') === p.id
-                          ? 'border-primary bg-primary/10'
-                          : isDarkMode
-                            ? 'border-gray-700 bg-gray-800 hover:border-gray-600'
-                            : 'border-neutral-light bg-white hover:border-neutral-mid/30'
-                      }`}
-                    >
-                      <p className={`text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-neutral-dark'}`}>{p.name}</p>
-                      <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-neutral-mid'}`}>{p.desc}</p>
-                    </button>
-                  ))}
-                </div>
-              </div>
+                <select
+                  value={formData.tts_language || 'en-IN'}
+                  onChange={(e) => setFormData({ ...formData, tts_language: e.target.value })}
+                  className={`w-full p-2 rounded-lg border text-sm mb-4 ${
+                    isDarkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-neutral-light text-neutral-dark'
+                  }`}
+                >
+                  {[
+                    { v: 'en-IN', l: 'English (India) — default' },
+                    { v: 'hi-IN', l: 'Hindi' },
+                    { v: 'bn-IN', l: 'Bengali' },
+                    { v: 'gu-IN', l: 'Gujarati' },
+                    { v: 'kn-IN', l: 'Kannada' },
+                    { v: 'ml-IN', l: 'Malayalam' },
+                    { v: 'mr-IN', l: 'Marathi' },
+                    { v: 'od-IN', l: 'Odia' },
+                    { v: 'pa-IN', l: 'Punjabi' },
+                    { v: 'ta-IN', l: 'Tamil' },
+                    { v: 'te-IN', l: 'Telugu' },
+                  ].map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+                </select>
 
-              {/* Cartesia-native tuning. Renders only when Cartesia is the
-                  selected TTS provider — keeps the ElevenLabs experience
-                  byte-for-byte identical to before (no extra controls, no
-                  shifted layout). When Cartesia IS selected we expose the two
-                  knobs that Cartesia's prosody model actually uses: output
-                  language (BCP-47 short code) and 0-3 emotion tags. These
-                  are wired through tts_language / tts_emotion in formData →
-                  POST/PUT payload → Mongo → assistant_config coercion →
-                  cartesia.TTS(language=..., emotion=...). ElevenLabs assistants
-                  ignore both fields at runtime. */}
-              {(formData.tts_provider || 'elevenlabs') === 'cartesia' && (
-                <div className={`mb-6 p-4 rounded-xl border ${isDarkMode ? 'border-gray-700 bg-gray-800' : 'border-neutral-light bg-white'}`}>
-                  <p className={`text-sm font-semibold mb-1 ${isDarkMode ? 'text-white' : 'text-neutral-dark'}`}>
-                    Cartesia voice tuning
-                  </p>
-                  <p className={`text-xs mb-4 ${isDarkMode ? 'text-gray-400' : 'text-neutral-mid'}`}>
-                    Cartesia&apos;s native prosody controls. Pick the output language and (optionally) 1–3 emotion tags to lean the delivery; with no tags Cartesia uses its natural, neutral voice.
-                  </p>
-
-                  <label className={`block text-xs font-medium mb-1 ${isDarkMode ? 'text-gray-300' : 'text-neutral-dark'}`}>
-                    Output language
-                  </label>
-                  <select
-                    value={formData.tts_language || 'en'}
-                    onChange={(e) => setFormData({ ...formData, tts_language: e.target.value })}
-                    className={`w-full p-2 rounded-lg border text-sm mb-4 ${
-                      isDarkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-neutral-light text-neutral-dark'
-                    }`}
-                  >
-                    {[
-                      { v: 'en', l: 'English' }, { v: 'es', l: 'Spanish' }, { v: 'fr', l: 'French' },
-                      { v: 'de', l: 'German' }, { v: 'it', l: 'Italian' }, { v: 'pt', l: 'Portuguese' },
-                      { v: 'hi', l: 'Hindi' }, { v: 'ja', l: 'Japanese' }, { v: 'zh', l: 'Chinese' },
-                      { v: 'ko', l: 'Korean' }, { v: 'nl', l: 'Dutch' }, { v: 'pl', l: 'Polish' },
-                      { v: 'tr', l: 'Turkish' }, { v: 'ru', l: 'Russian' }, { v: 'ar', l: 'Arabic' },
-                      { v: 'sv', l: 'Swedish' }, { v: 'cs', l: 'Czech' }, { v: 'ro', l: 'Romanian' },
-                      { v: 'hu', l: 'Hungarian' }, { v: 'id', l: 'Indonesian' },
-                    ].map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
-                  </select>
-
-                  <label className={`block text-xs font-medium mb-1 ${isDarkMode ? 'text-gray-300' : 'text-neutral-dark'}`}>
-                    Emotion <span className={`font-normal ${isDarkMode ? 'text-gray-500' : 'text-neutral-mid'}`}>(optional — leave on Neutral for natural prosody)</span>
-                  </label>
-                  {/* Sonic-3 takes a SINGLE Title-Case emotion. The backend
-                      whitelist (assistant_config._CARTESIA_EMOTION_NAMES)
-                      accepts Cartesia's full 59-value Literal enum; the
-                      curated subset below is the slice that's actually useful
-                      for customer-service / sales voice agents. A user with
-                      a niche need can store any of the 59 via direct API. */}
-                  <select
-                    value={(formData.tts_emotion && formData.tts_emotion[0]) || ''}
-                    onChange={(e) => setFormData({
+                <label className={`block text-xs font-medium mb-1 ${isDarkMode ? 'text-gray-300' : 'text-neutral-dark'}`}>
+                  Bulbul model
+                </label>
+                <select
+                  value={formData.tts_model || 'bulbul:v3'}
+                  onChange={(e) => {
+                    // Switching model can invalidate the current speaker
+                    // (anushka is v2-only, pooja is v3-only). The backend
+                    // coercion downgrades incompatible combos at agent load,
+                    // but we also reset speaker on the client so the picker
+                    // below doesn't show a stale selection.
+                    const newModel = e.target.value;
+                    const newDefaultSpeaker = newModel === 'bulbul:v2' ? 'anushka' : 'shubh';
+                    setFormData({
                       ...formData,
-                      // Empty string ⇒ no emotion ([] for storage); otherwise
-                      // store as a 1-element list for forward-compat with a
-                      // future multi-emotion API.
-                      tts_emotion: e.target.value ? [e.target.value] : [],
-                    })}
-                    className={`w-full p-2 rounded-lg border text-sm ${
-                      isDarkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-neutral-light text-neutral-dark'
-                    }`}
-                  >
-                    <option value="">— Neutral (no emotion) —</option>
-                    <optgroup label="Warm">
-                      <option value="Happy">Happy</option>
-                      <option value="Enthusiastic">Enthusiastic</option>
-                      <option value="Grateful">Grateful</option>
-                      <option value="Sympathetic">Sympathetic</option>
-                      <option value="Affectionate">Affectionate</option>
-                    </optgroup>
-                    <optgroup label="Confident">
-                      <option value="Confident">Confident</option>
-                      <option value="Determined">Determined</option>
-                      <option value="Proud">Proud</option>
-                      <option value="Trust">Trust</option>
-                    </optgroup>
-                    <optgroup label="Engaged">
-                      <option value="Curious">Curious</option>
-                      <option value="Contemplative">Contemplative</option>
-                      <option value="Anticipation">Anticipation</option>
-                    </optgroup>
-                    <optgroup label="Calm">
-                      <option value="Calm">Calm</option>
-                      <option value="Content">Content</option>
-                      <option value="Peaceful">Peaceful</option>
-                    </optgroup>
-                    <optgroup label="Apologetic">
-                      <option value="Apologetic">Apologetic</option>
-                    </optgroup>
-                  </select>
-                </div>
-              )}
+                      tts_model: newModel,
+                      tts_voice: newDefaultSpeaker,
+                      voice: newDefaultSpeaker,
+                    });
+                  }}
+                  className={`w-full p-2 rounded-lg border text-sm ${
+                    isDarkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-neutral-light text-neutral-dark'
+                  }`}
+                >
+                  <option value="bulbul:v3">Bulbul v3 — Default (30 voices, streaming)</option>
+                  <option value="bulbul:v3-beta">Bulbul v3-beta (25 voices)</option>
+                  <option value="bulbul:v2">Bulbul v2 — Legacy (7 voices incl. anushka)</option>
+                </select>
+              </div>
 
               {/* Expressive Mode toggle — opt-in. Tells the LLM to use natural
                   conversational fillers ("hmm" / "you know"), pacing cues
@@ -3029,9 +3014,7 @@ export default function AIAgentPage() {
                   Voice
                 </label>
                 <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-neutral-mid'} mb-3`}>
-                  {(formData.tts_provider || 'elevenlabs') === 'cartesia'
-                    ? 'Select a Cartesia Sonic voice. Paste a custom UUID below to use any voice from your Cartesia library.'
-                    : 'Select the ElevenLabs voice for your AI assistant.'}
+                  Select a Sarvam Bulbul voice. The list below filters to voices compatible with the selected Bulbul model — v2 voices (anushka, manisha, vidya, arya, abhilash, karun, hitesh) are NOT compatible with v3, and vice versa.
                 </p>
                 {/* === Unified voice picker (works for both ElevenLabs +
                     Cartesia — list is dynamic from /api/voices/list?provider).
@@ -3152,18 +3135,18 @@ export default function AIAgentPage() {
                     configured, or fetch failed). Manual entry still works. */}
                 {!loadingVoices && filteredVoices.length === 0 && (
                   <div className={`mt-4 p-3 rounded-xl border ${isDarkMode ? 'bg-gray-800/40 border-gray-700 text-gray-300' : 'bg-neutral-light border-neutral-mid/20 text-neutral-dark'} text-sm`}>
-                    No voices found for {(formData.tts_provider || 'elevenlabs') === 'cartesia' ? 'Cartesia' : 'ElevenLabs'}. You can paste a voice ID directly below.
+                    No Sarvam Bulbul voices match the current filters. Try changing the model/gender/accent filters, or paste a speaker name directly below.
                   </div>
                 )}
                 <div className="mt-3">
                   <label className={`block text-xs font-medium ${isDarkMode ? 'text-gray-400' : 'text-neutral-mid'} mb-1`}>
-                    Or paste a voice ID directly
+                    Or paste a Sarvam speaker name directly
                   </label>
                   <input
                     type="text"
                     value={formData.tts_voice || ''}
                     onChange={(e) => setFormData({ ...formData, voice: e.target.value, tts_voice: e.target.value })}
-                    placeholder={(formData.tts_provider || 'elevenlabs') === 'cartesia' ? '694f9389-aac1-45b6-b726-9d9369183238' : 'EXAVITQu4vr4xnSDxMaL'}
+                    placeholder={formData.tts_model === 'bulbul:v2' ? 'anushka' : 'shubh'}
                     className={`w-full px-3 py-2 rounded-lg ${isDarkMode ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-500' : 'bg-neutral-light border-neutral-mid/20 text-neutral-dark'} border focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary text-xs font-mono`}
                   />
                 </div>

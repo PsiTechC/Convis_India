@@ -148,8 +148,8 @@ def assistant_has_api_key(assistant: dict) -> bool:
     
     # Get providers used by this assistant
     asr_provider = assistant.get('asr_provider', 'deepgram').lower()
-    tts_provider = assistant.get('tts_provider', 'elevenlabs').lower()
-    llm_provider = assistant.get('llm_provider', 'openai').lower()
+    tts_provider = assistant.get('tts_provider', 'sarvam').lower()
+    llm_provider = assistant.get('llm_provider', 'sarvam').lower()
 
     # voice_mode is always 'custom'
     voice_mode = assistant.get('voice_mode', 'custom').lower()
@@ -331,20 +331,18 @@ async def create_assistant(
             "calendar_enabled": assistant_data.calendar_enabled if assistant_data.calendar_enabled is not None else False,
             "last_calendar_used_index": -1,
             "voice_mode": "custom",
-            "asr_provider": "deepgram",
-            "tts_provider": "elevenlabs",
-            # ASR Configuration — hardcoded.
-            # `nova-2-phonecall` is the PSTN-tuned variant: same Deepgram
-            # price/latency as vanilla nova-2 but materially better word
-            # error rate on 8 kHz telephony audio AND reliably fires
-            # end-of-utterance. Vanilla nova-2 was previously the default
-            # here and produced 1.8-3.7s transcription_delay outliers on
-            # PSTN calls (root cause of the Care Companion lag bug).
+            "asr_provider": (assistant_data.asr_provider or "deepgram").lower(),
+            "tts_provider": (assistant_data.tts_provider or "sarvam").lower(),
+            # ASR Configuration. `nova-2-phonecall` is the PSTN-tuned Deepgram
+            # variant: same price/latency as vanilla nova-2 but materially
+            # better WER on 8 kHz telephony audio AND reliably fires
+            # end-of-utterance. Vanilla nova-2 produced 1.8-3.7s
+            # transcription_delay outliers on PSTN calls.
             "asr_language": assistant_data.asr_language or "en",
-            "asr_model": "nova-2-phonecall",
+            "asr_model": assistant_data.asr_model or "nova-2-phonecall",
             "asr_keywords": assistant_data.asr_keywords or [],
-            # TTS Configuration — hardcoded
-            "tts_model": "eleven_flash_v2_5",
+            # TTS Configuration — Sarvam Bulbul stack post-migration.
+            "tts_model": assistant_data.tts_model or "bulbul:v3",
             "tts_voice": assistant_data.tts_voice or assistant_data.voice,
             "tts_speed": assistant_data.tts_speed if assistant_data.tts_speed is not None else 1.0,
             # Cartesia-only knobs — stored on every assistant so a later
@@ -363,13 +361,13 @@ async def create_assistant(
             "check_user_online": assistant_data.check_user_online if assistant_data.check_user_online is not None else True,
             # Buffer & Latency Settings
             "audio_buffer_size": assistant_data.audio_buffer_size if assistant_data.audio_buffer_size is not None else 200,
-            # LLM Configuration. Defaults intentionally favour the locked
-            # Convis stack (gpt-4o-mini): 3-5x faster than gpt-4-turbo, supports
-            # OpenAI prompt caching (gpt-4-turbo does not — every turn would
-            # pay full prompt cost, ~3-4s LLM TTFT). 250 tokens ≈ 70s of speech,
-            # comfortable headroom so chatty turns don't get cut off mid-sentence.
-            "llm_provider": "openai",
-            "llm_model": assistant_data.llm_model or "gpt-4o-mini",
+            # LLM Configuration — Sarvam stack post-migration. sarvam-105b is
+            # the flagship (Indic-tuned MoE; backend injects /nothink to
+            # disable reasoning and keep TTFT under ~3s). 250 tokens ≈ 70s of
+            # speech, comfortable headroom so chatty turns don't get cut off
+            # mid-sentence.
+            "llm_provider": (assistant_data.llm_provider or "sarvam").lower(),
+            "llm_model": assistant_data.llm_model or "sarvam-105b",
             "llm_max_tokens": assistant_data.llm_max_tokens if assistant_data.llm_max_tokens is not None else 250,
             # Language Configuration
             "bot_language": assistant_data.bot_language or "en",
@@ -446,16 +444,16 @@ async def create_assistant(
             calendar_enabled=assistant_data.calendar_enabled if assistant_data.calendar_enabled is not None else False,
             last_calendar_used_index=-1,
             voice_mode=requested_voice_mode,
-            asr_provider=assistant_data.asr_provider or "openai",
-            tts_provider=assistant_data.tts_provider or "openai",
+            asr_provider=assistant_doc["asr_provider"],
+            tts_provider=assistant_doc["tts_provider"],
             # ASR Configuration
             asr_language=assistant_data.asr_language or "en",
-            asr_model=assistant_data.asr_model,
+            asr_model=assistant_doc["asr_model"],
             asr_keywords=assistant_data.asr_keywords or [],
             # TTS Configuration
-            tts_model=assistant_data.tts_model,
+            tts_model=assistant_doc["tts_model"],
             tts_speed=assistant_data.tts_speed if assistant_data.tts_speed is not None else 1.0,
-            tts_voice=assistant_data.tts_voice or assistant_data.voice,
+            tts_voice=assistant_doc["tts_voice"],
             tts_language=assistant_data.tts_language if assistant_data.tts_language is not None else "en",
             tts_emotion=list(assistant_data.tts_emotion) if assistant_data.tts_emotion else [],
             expressive_mode=bool(assistant_data.expressive_mode) if assistant_data.expressive_mode is not None else False,
@@ -470,9 +468,9 @@ async def create_assistant(
             # Buffer & Latency Settings
             audio_buffer_size=assistant_data.audio_buffer_size if assistant_data.audio_buffer_size is not None else 200,
             # LLM Configuration
-            llm_provider=assistant_data.llm_provider or "openai",
-            llm_model=assistant_data.llm_model,
-            llm_max_tokens=assistant_data.llm_max_tokens if assistant_data.llm_max_tokens is not None else 150,
+            llm_provider=assistant_doc["llm_provider"],
+            llm_model=assistant_doc["llm_model"],
+            llm_max_tokens=assistant_doc["llm_max_tokens"],
             # Language Configuration
             bot_language=assistant_data.bot_language or "en",
             # VAD & Noise Suppression Configuration
@@ -669,7 +667,7 @@ async def get_user_assistants(
                 calendar_account_email=calendar_metadata.get("email") if calendar_metadata else None,
                 voice_mode=assistant.get('voice_mode', 'custom'),
                 asr_provider=assistant.get('asr_provider', 'deepgram'),
-                tts_provider=assistant.get('tts_provider', 'elevenlabs'),
+                tts_provider=assistant.get('tts_provider', 'sarvam'),
                 # ASR Configuration
                 asr_language=assistant.get('asr_language', 'en'),
                 asr_model=assistant.get('asr_model'),
@@ -692,9 +690,9 @@ async def get_user_assistants(
                 # Buffer & Latency Settings
                 audio_buffer_size=assistant.get('audio_buffer_size', 200),
                 # LLM Configuration
-                llm_provider=assistant.get('llm_provider', 'openai'),
+                llm_provider=assistant.get('llm_provider', 'sarvam'),
                 llm_model=assistant.get('llm_model'),
-                llm_max_tokens=assistant.get('llm_max_tokens', 150),
+                llm_max_tokens=assistant.get('llm_max_tokens', 250),
                 # Language Configuration
                 bot_language=assistant.get('bot_language', 'en'),
                 # VAD & Noise Suppression Configuration
@@ -884,7 +882,7 @@ async def get_assistant(
             last_calendar_used_index=assistant.get('last_calendar_used_index', -1),
             voice_mode=assistant.get('voice_mode', 'custom'),
             asr_provider=assistant.get('asr_provider', 'deepgram'),
-            tts_provider=assistant.get('tts_provider', 'elevenlabs'),
+            tts_provider=assistant.get('tts_provider', 'sarvam'),
             # ASR Configuration
             asr_language=assistant.get('asr_language', 'en'),
             asr_model=assistant.get('asr_model'),
@@ -907,9 +905,9 @@ async def get_assistant(
             # Buffer & Latency Settings
             audio_buffer_size=assistant.get('audio_buffer_size', 200),
             # LLM Configuration
-            llm_provider=assistant.get('llm_provider', 'openai'),
+            llm_provider=assistant.get('llm_provider', 'sarvam'),
             llm_model=assistant.get('llm_model'),
-            llm_max_tokens=assistant.get('llm_max_tokens', 150),
+            llm_max_tokens=assistant.get('llm_max_tokens', 250),
             # Language Configuration
             bot_language=assistant.get('bot_language', 'en'),
             # VAD & Noise Suppression Configuration
@@ -1260,8 +1258,8 @@ async def update_assistant(
         
         # Get providers used by this assistant
         asr_provider = updated_assistant.get('asr_provider', 'deepgram').lower()
-        tts_provider = updated_assistant.get('tts_provider', 'elevenlabs').lower()
-        llm_provider = updated_assistant.get('llm_provider', 'openai').lower()
+        tts_provider = updated_assistant.get('tts_provider', 'sarvam').lower()
+        llm_provider = updated_assistant.get('llm_provider', 'sarvam').lower()
         voice_mode = updated_assistant.get('voice_mode', 'custom').lower()
         
         # Check if system API keys are available in environment (deployment mode)
@@ -1341,7 +1339,7 @@ async def update_assistant(
             last_calendar_used_index=updated_assistant.get('last_calendar_used_index', -1),
             voice_mode=updated_assistant.get('voice_mode', 'custom'),
             asr_provider=updated_assistant.get('asr_provider', 'deepgram'),
-            tts_provider=updated_assistant.get('tts_provider', 'elevenlabs'),
+            tts_provider=updated_assistant.get('tts_provider', 'sarvam'),
             # ASR Configuration
             asr_language=updated_assistant.get('asr_language', 'en'),
             asr_model=updated_assistant.get('asr_model'),
@@ -1362,9 +1360,9 @@ async def update_assistant(
             # Buffer & Latency Settings
             audio_buffer_size=updated_assistant.get('audio_buffer_size', 200),
             # LLM Configuration
-            llm_provider=updated_assistant.get('llm_provider', 'openai'),
+            llm_provider=updated_assistant.get('llm_provider', 'sarvam'),
             llm_model=updated_assistant.get('llm_model'),
-            llm_max_tokens=updated_assistant.get('llm_max_tokens', 150),
+            llm_max_tokens=updated_assistant.get('llm_max_tokens', 250),
             # Language Configuration
             bot_language=updated_assistant.get('bot_language', 'en'),
             # VAD & Noise Suppression Configuration

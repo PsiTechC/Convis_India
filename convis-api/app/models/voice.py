@@ -82,12 +82,18 @@ class RemoveVoiceRequest(BaseModel):
 
 class UniversalVoiceDemoRequest(BaseModel):
     """Request for generating voice demo for any provider"""
-    voice_id: str = Field(..., description="Voice identifier")
-    provider: Literal["elevenlabs", "cartesia"] = Field(..., description="TTS provider")
+    voice_id: str = Field(..., description="Voice identifier (Sarvam speaker name, ElevenLabs voice ID, or Cartesia UUID)")
+    provider: Literal["sarvam", "elevenlabs", "cartesia"] = Field(
+        default="sarvam",
+        description="TTS provider — defaults to 'sarvam' post-2026-05 voice migration",
+    )
     user_id: str = Field(..., description="User ID for API key lookup")
     text: Optional[str] = Field(
         default="This is the text you can play using this voice. Experience the natural tone and clarity.",
         description="Text to synthesize"
     )
     model: Optional[str] = Field(None, description="Specific model to use (provider-dependent)")
+    # Sarvam-only — BCP-47 India-locale (e.g. 'en-IN', 'hi-IN'). Ignored by
+    # ElevenLabs/Cartesia. Defaults to 'en-IN' server-side when omitted.
+    language: Optional[str] = Field(None, description="Sarvam target_language_code (BCP-47)")
     api_key_id: Optional[str] = Field(None, description="Specific API key ID to use")
