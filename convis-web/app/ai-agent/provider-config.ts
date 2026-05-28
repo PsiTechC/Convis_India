@@ -34,15 +34,11 @@ export const ENHANCED_TTS_VOICES = {
     { value: 'aayan', label: 'Aayan — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
     { value: 'ashutosh', label: 'Ashutosh — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
     { value: 'advait', label: 'Advait — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
-    { value: 'anand', label: 'Anand — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
-    { value: 'tarun', label: 'Tarun — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
-    { value: 'sunny', label: 'Sunny — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
-    { value: 'mani', label: 'Mani — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
-    { value: 'gokul', label: 'Gokul — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
-    { value: 'vijay', label: 'Vijay — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
-    { value: 'mohit', label: 'Mohit — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
-    { value: 'rehan', label: 'Rehan — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
-    { value: 'soham', label: 'Soham — Male (bulbul:v3)', gender: 'male', accent: 'Indian', model: 'bulbul:v3' },
+    // NOTE: anand / tarun / sunny / mani / gokul / vijay / mohit / rehan / soham
+    // are accepted by Sarvam's REST endpoint but NOT in livekit-plugins-sarvam
+    // 1.5.12's MODEL_SPEAKER_COMPATIBILITY table. Selecting them would crash
+    // the agent worker on TTS init OR silently downgrade to 'shubh' via the
+    // backend coercer. Hidden from the picker until the plugin catches up.
     // Female (v3)
     { value: 'ritu', label: 'Ritu — Female (bulbul:v3)', gender: 'female', accent: 'Indian', model: 'bulbul:v3' },
     { value: 'priya', label: 'Priya — Female (bulbul:v3)', gender: 'female', accent: 'Indian', model: 'bulbul:v3' },

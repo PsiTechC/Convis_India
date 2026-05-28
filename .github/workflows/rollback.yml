@@ -1,0 +1,147 @@
+name: Rollback to a previous SHA
+
+# How this works:
+#   1. You pick a git SHA from the dropdown in the Actions tab (Run workflow)
+#   2. Workflow verifies that an image with tag :<sha> exists in ECR
+#   3. Re-tags that immutable :<sha> image as :latest in ECR — no Docker rebuild
+#   4. Triggers App Runner redeploys (they pull :latest, get the old image)
+#   5. Force-redeploys the ECS agent service (same image, picks up :latest)
+#
+# In ~30 seconds you're back to the older version. No console clicks.
+#
+# WHY this approach: every successful deploy pushes BOTH :latest and :<git-sha>
+# tags to ECR. The :<sha> tags are immutable history. Rollback = make :latest
+# point at one of those historical manifests. Zero rebuild needed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Git SHA to roll back to (40-char or short hash). Must exist as an image tag in ECR.'
+        required: true
+        type: string
+      service:
+        description: 'Which service(s) to roll back'
+        required: true
+        type: choice
+        default: 'all'
+        options:
+          - 'all'
+          - 'convis-api'
+          - 'convis-web'
+          - 'agent-only'    # rolls back the ECS agent worker only (same image as convis-api)
+      reason:
+        description: 'Why are you rolling back? (logged, helps the team)'
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+  ECR_REGISTRY: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
+  TARGET_SHA: ${{ inputs.sha }}
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log rollback intent
+        run: |
+          echo "::notice title=Rollback initiated::Service=${{ inputs.service }} SHA=${{ env.TARGET_SHA }} reason=${{ inputs.reason || 'not specified' }} actor=${{ github.actor }}"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubActionsConvisDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ─── Verify the target SHA exists in ECR before doing anything ───
+      - name: Verify convis-api:${{ env.TARGET_SHA }} exists in ECR
+        if: inputs.service == 'all' || inputs.service == 'convis-api' || inputs.service == 'agent-only'
+        run: |
+          aws ecr describe-images \
+            --repository-name convis-api \
+            --image-ids imageTag=${{ env.TARGET_SHA }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'imageDetails[0].imageTags' \
+          || (echo "::error::convis-api:${{ env.TARGET_SHA }} NOT in ECR. Pick a SHA from a previous successful deploy." && exit 1)
+
+      - name: Verify convis-web:${{ env.TARGET_SHA }} exists in ECR
+        if: inputs.service == 'all' || inputs.service == 'convis-web'
+        run: |
+          aws ecr describe-images \
+            --repository-name convis-web \
+            --image-ids imageTag=${{ env.TARGET_SHA }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'imageDetails[0].imageTags' \
+          || (echo "::error::convis-web:${{ env.TARGET_SHA }} NOT in ECR. Pick a SHA from a previous successful deploy." && exit 1)
+
+      # ─── Re-tag :<sha> as :latest by copying the manifest ───
+      # Using `aws ecr batch-get-image` + `put-image` avoids needing Docker.
+      - name: Re-tag convis-api:${{ env.TARGET_SHA }} → :latest
+        if: inputs.service == 'all' || inputs.service == 'convis-api' || inputs.service == 'agent-only'
+        run: |
+          MANIFEST=$(aws ecr batch-get-image \
+            --repository-name convis-api \
+            --image-ids imageTag=${{ env.TARGET_SHA }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'images[0].imageManifest' \
+            --output text)
+          aws ecr put-image \
+            --repository-name convis-api \
+            --image-tag latest \
+            --image-manifest "$MANIFEST" \
+            --region ${{ env.AWS_REGION }} \
+            > /dev/null
+          echo "convis-api:latest now points at SHA ${{ env.TARGET_SHA }}"
+
+      - name: Re-tag convis-web:${{ env.TARGET_SHA }} → :latest
+        if: inputs.service == 'all' || inputs.service == 'convis-web'
+        run: |
+          MANIFEST=$(aws ecr batch-get-image \
+            --repository-name convis-web \
+            --image-ids imageTag=${{ env.TARGET_SHA }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'images[0].imageManifest' \
+            --output text)
+          aws ecr put-image \
+            --repository-name convis-web \
+            --image-tag latest \
+            --image-manifest "$MANIFEST" \
+            --region ${{ env.AWS_REGION }} \
+            > /dev/null
+          echo "convis-web:latest now points at SHA ${{ env.TARGET_SHA }}"
+
+      # ─── Trigger redeploys of the affected services ───
+      - name: Redeploy convis-api on App Runner
+        if: inputs.service == 'all' || inputs.service == 'convis-api'
+        run: |
+          SERVICE_ARN=$(aws apprunner list-services --region ${{ env.AWS_REGION }} \
+            --query "ServiceSummaryList[?ServiceName=='convis-api'].ServiceArn|[0]" --output text)
+          aws apprunner start-deployment --service-arn "$SERVICE_ARN" --region ${{ env.AWS_REGION }}
+
+      - name: Redeploy convis-web on App Runner
+        if: inputs.service == 'all' || inputs.service == 'convis-web'
+        run: |
+          SERVICE_ARN=$(aws apprunner list-services --region ${{ env.AWS_REGION }} \
+            --query "ServiceSummaryList[?ServiceName=='convis-web'].ServiceArn|[0]" --output text)
+          aws apprunner start-deployment --service-arn "$SERVICE_ARN" --region ${{ env.AWS_REGION }}
+
+      - name: Force-redeploy ECS agent worker
+        if: inputs.service == 'all' || inputs.service == 'agent-only'
+        run: |
+          aws ecs update-service \
+            --cluster convis \
+            --service convis-livekit-agent \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }} \
+            --output table \
+            --query 'service.{name:serviceName,desired:desiredCount,running:runningCount,status:status}'
+
+      - name: Rollback summary
+        run: |
+          echo "::notice title=Rollback complete::Service(s) rolled back to SHA ${{ env.TARGET_SHA }}. App Runner usually takes 2-5 min to fully cut over; check the AWS Console for live status."

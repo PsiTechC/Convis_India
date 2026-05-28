@@ -1,0 +1,227 @@
+name: Deploy to AWS
+
+# When this runs:
+#   - push to main / Tejas-feature-branch → full deploy
+#   - workflow_dispatch → manual run from Actions tab (useful for first deploy)
+#
+# What this does:
+#   1. Builds Docker images for convis-api and convis-web on amd64
+#   2. Pushes them to ECR with two tags: :latest and :sha-<short-git-sha>
+#   3. Triggers App Runner redeploys for convis-api and convis-web
+#   4. Forces ECS Fargate to pull the new :latest for the agent worker
+#
+# Auth: federated OIDC, no long-lived AWS keys stored in GitHub. The IAM role
+# `GitHubActionsConvisDeployRole` is restricted to this repo (any branch/PR).
+on:
+  push:
+    branches:
+      - main
+      - Tejas-feature-branch
+  workflow_dispatch:
+
+# OIDC requires id-token: write permission. contents: read is the default.
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+  ECR_REGISTRY: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # Detect which directories changed. Skip image builds when only docs
+  # or unrelated paths change — saves CI minutes and ECR storage.
+  # ─────────────────────────────────────────────────────────────────────
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # On the first run (workflow_dispatch with no base ref), build everything.
+          base: ${{ github.event.before || '' }}
+          filters: |
+            api:
+              - 'convis-api/**'
+              - '.github/workflows/deploy.yml'
+            web:
+              - 'convis-web/**'
+              - '.github/workflows/deploy.yml'
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Build + push convis-api image. This SAME image is used by both
+  # App Runner (HTTP entrypoint) and ECS Fargate (agent worker entrypoint).
+  # The ECS task definition overrides the container CMD.
+  # ─────────────────────────────────────────────────────────────────────
+  build-api:
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.api == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubActionsConvisDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # The convis-api Dockerfile installs PyTorch CPU-only (~200MB) which is
+      # slow. Buildx layer caching across runs cuts subsequent builds from
+      # ~8 min to ~2 min on the same Dockerfile + requirements.txt.
+      - name: Build and push convis-api image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./convis-api
+          file: ./convis-api/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.ECR_REGISTRY }}/convis-api:latest
+            ${{ env.ECR_REGISTRY }}/convis-api:${{ env.IMAGE_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Defensive — App Runner / ECS only roll when the manifest is actually
+      # in ECR. The buildx --push silent-failure mode has bitten us before.
+      - name: Verify image landed in ECR
+        run: |
+          aws ecr describe-images \
+            --repository-name convis-api \
+            --image-ids imageTag=${{ env.IMAGE_TAG }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'imageDetails[0].imageTags' || (echo "Image NOT pushed to ECR — aborting" && exit 1)
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Build + push convis-web image. NEXT_PUBLIC_* env vars are baked into
+  # the Next.js bundle at build time — they MUST come in as --build-arg,
+  # not as App Runner runtime env vars (which the browser never sees).
+  # ─────────────────────────────────────────────────────────────────────
+  build-web:
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.web == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubActionsConvisDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push convis-web image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./convis-web
+          file: ./convis-web/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.ECR_REGISTRY }}/convis-web:latest
+            ${{ env.ECR_REGISTRY }}/convis-web:${{ env.IMAGE_TAG }}
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify image landed in ECR
+        run: |
+          aws ecr describe-images \
+            --repository-name convis-web \
+            --image-ids imageTag=${{ env.IMAGE_TAG }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'imageDetails[0].imageTags' || (echo "Image NOT pushed to ECR — aborting" && exit 1)
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Roll the App Runner services. App Runner picks up :latest from ECR.
+  # ─────────────────────────────────────────────────────────────────────
+  deploy-api:
+    needs: build-api
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubActionsConvisDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Trigger App Runner deployment — convis-api
+        run: |
+          SERVICE_ARN=$(aws apprunner list-services --region ${{ env.AWS_REGION }} \
+            --query "ServiceSummaryList[?ServiceName=='convis-api'].ServiceArn|[0]" \
+            --output text)
+          if [ "$SERVICE_ARN" = "None" ] || [ -z "$SERVICE_ARN" ]; then
+            echo "convis-api App Runner service not found. Create it manually first (see deploy doc)."
+            exit 1
+          fi
+          aws apprunner start-deployment --service-arn "$SERVICE_ARN" --region ${{ env.AWS_REGION }}
+          echo "Deployment triggered for $SERVICE_ARN"
+
+  deploy-web:
+    needs: build-web
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubActionsConvisDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Trigger App Runner deployment — convis-web
+        run: |
+          SERVICE_ARN=$(aws apprunner list-services --region ${{ env.AWS_REGION }} \
+            --query "ServiceSummaryList[?ServiceName=='convis-web'].ServiceArn|[0]" \
+            --output text)
+          if [ "$SERVICE_ARN" = "None" ] || [ -z "$SERVICE_ARN" ]; then
+            echo "convis-web App Runner service not found. Create it manually first."
+            exit 1
+          fi
+          aws apprunner start-deployment --service-arn "$SERVICE_ARN" --region ${{ env.AWS_REGION }}
+          echo "Deployment triggered for $SERVICE_ARN"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Force ECS Fargate to pull the new convis-api:latest and replace the
+  # agent worker task. --force-new-deployment doesn't need a new task def
+  # since the task def references :latest.
+  # ─────────────────────────────────────────────────────────────────────
+  deploy-agent:
+    needs: build-api    # agent uses the convis-api image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubActionsConvisDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Force-redeploy convis-livekit-agent
+        run: |
+          aws ecs update-service \
+            --cluster convis \
+            --service convis-livekit-agent \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }} \
+            --output table \
+            --query 'service.{name:serviceName,desired:desiredCount,running:runningCount,status:status}'
