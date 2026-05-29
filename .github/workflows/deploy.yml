@@ -1,18 +1,19 @@
 name: Deploy to AWS
 
 # When this runs:
-#   - push to main → full deploy (api + web to ap-south-1, agent stays in us-east-1 for now)
+#   - push to main → full deploy (api + web + agent), ALL in ap-south-1 only.
 #   - workflow_dispatch → manual run from Actions tab (useful for first deploy / forced rebuild)
+#
+# REGION ISOLATION (2026-05-29): This pipeline targets ONLY ap-south-1.
+# The us-east-1 stack (cluster `convis`, the separately-owned main product) is
+# intentionally NEVER touched here — no us-east-1 ECR push, no us-east-1 agent
+# redeploy. India (ap-south-1) runs its own agent service, fully independent.
 #
 # What this does:
 #   1. Builds Docker images for convis-api and convis-web on amd64
-#   2. Pushes convis-api to BOTH ap-south-1 ECR (for the new ECS Express Mode api service)
-#      AND us-east-1 ECR (so the still-running us-east-1 agent task keeps getting new images).
-#      Once the agent is migrated to ap-south-1, the us-east-1 push step can be removed.
-#   3. Pushes convis-web to ap-south-1 ECR only.
-#   4. Forces ECS Express Mode services (convis-api, convis-web in `default` cluster, ap-south-1)
-#      to pull the new :latest.
-#   5. Forces the us-east-1 agent service (cluster `convis`) to pull the new :latest.
+#   2. Pushes convis-api + convis-web to ap-south-1 ECR only.
+#   3. Forces ECS services (convis-api, convis-web, convis-livekit-agent in
+#      `default` cluster, ap-south-1) to pull the new :latest.
 #
 # Auth: federated OIDC, no long-lived AWS keys stored in GitHub. The IAM role
 # `GitHubActionsConvisDeployRole` is restricted to this repo.
@@ -28,11 +29,9 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: ${{ vars.AWS_REGION }}              # ap-south-1 — primary region for api/web
-  AWS_AGENT_REGION: us-east-1                     # TEMP: agent still lives here until Part 8 migration
+  AWS_REGION: ${{ vars.AWS_REGION }}              # ap-south-1 — the ONLY region this pipeline touches
   AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
   ECR_REGISTRY_PRIMARY: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
-  ECR_REGISTRY_LEGACY: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
   IMAGE_TAG: ${{ github.sha }}
 
 jobs:
@@ -61,10 +60,9 @@ jobs:
               - '.github/workflows/deploy.yml'
 
   # ─────────────────────────────────────────────────────────────────────
-  # Build + push convis-api image. This SAME image is used by both
-  # the ap-south-1 ECS Express Mode api service AND the us-east-1
-  # ECS Fargate agent worker (with a CMD override in the agent task def).
-  # We push to BOTH regions' ECR until the agent migrates to ap-south-1.
+  # Build + push convis-api image to ap-south-1 ECR. This SAME image is
+  # used by both the ap-south-1 api service AND the ap-south-1 agent worker
+  # (the agent task def supplies a CMD override to run the worker instead).
   # ─────────────────────────────────────────────────────────────────────
   build-api:
     needs: detect-changes
@@ -84,22 +82,13 @@ jobs:
           aws ecr get-login-password --region ${{ env.AWS_REGION }} \
             | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY_PRIMARY }}
 
-      # TEMPORARY: also push to us-east-1 ECR so the still-running us-east-1
-      # convis-livekit-agent keeps receiving new convis-api images. Remove
-      # this step (and the us-east-1 push tags below) after the agent is
-      # migrated to ap-south-1 (Part 8 of deployment-docs/aws/AWS_ECS_EXPRESS_MODE.md).
-      - name: Login to us-east-1 ECR (legacy, for agent)
-        run: |
-          aws ecr get-login-password --region ${{ env.AWS_AGENT_REGION }} \
-            | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY_LEGACY }}
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       # The convis-api Dockerfile installs PyTorch CPU-only (~200MB) which is
       # slow. Buildx layer caching across runs cuts subsequent builds from
       # ~8 min to ~2 min on the same Dockerfile + requirements.txt.
-      - name: Build and push convis-api image (ap-south-1 + us-east-1)
+      - name: Build and push convis-api image (ap-south-1)
         uses: docker/build-push-action@v5
         with:
           context: ./convis-api
@@ -110,8 +99,6 @@ jobs:
           tags: |
             ${{ env.ECR_REGISTRY_PRIMARY }}/convis-api:latest
             ${{ env.ECR_REGISTRY_PRIMARY }}/convis-api:${{ env.IMAGE_TAG }}
-            ${{ env.ECR_REGISTRY_LEGACY }}/convis-api:latest
-            ${{ env.ECR_REGISTRY_LEGACY }}/convis-api:${{ env.IMAGE_TAG }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -124,14 +111,6 @@ jobs:
             --image-ids imageTag=${{ env.IMAGE_TAG }} \
             --region ${{ env.AWS_REGION }} \
             --query 'imageDetails[0].imageTags' || (echo "Image NOT pushed to ap-south-1 ECR — aborting" && exit 1)
-
-      - name: Verify image landed in us-east-1 ECR
-        run: |
-          aws ecr describe-images \
-            --repository-name convis-api \
-            --image-ids imageTag=${{ env.IMAGE_TAG }} \
-            --region ${{ env.AWS_AGENT_REGION }} \
-            --query 'imageDetails[0].imageTags' || (echo "Image NOT pushed to us-east-1 ECR — aborting" && exit 1)
 
   # ─────────────────────────────────────────────────────────────────────
   # Build + push convis-web image to ap-south-1 ECR only (no us-east-1
@@ -236,13 +215,13 @@ jobs:
             --query 'service.{name:serviceName,desired:desiredCount,running:runningCount,status:status}'
 
   # ─────────────────────────────────────────────────────────────────────
-  # Force ECS Fargate to pull the new convis-api:latest and replace the
-  # agent worker task. --force-new-deployment doesn't need a new task def
-  # since the task def references :latest.
+  # Force the ap-south-1 agent worker (cluster `default`, service
+  # convis-livekit-agent) to pull the new convis-api:latest. The agent
+  # task def references :latest with a CMD override to run the worker.
   #
-  # TEMPORARY: agent is still in us-east-1 cluster `convis`. After Part 8
-  # (agent migration to ap-south-1), change cluster: `default` and remove
-  # the explicit --region (let it inherit AWS_REGION = ap-south-1).
+  # NOTE: this NEVER touches us-east-1. The main product's agent in
+  # us-east-1 cluster `convis` is owned/deployed separately and must not
+  # be redeployed from this repo.
   # ─────────────────────────────────────────────────────────────────────
   deploy-agent:
     needs: build-api    # agent uses the convis-api image
@@ -252,14 +231,14 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubActionsConvisDeployRole
-          aws-region: ${{ env.AWS_AGENT_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Force-redeploy convis-livekit-agent (us-east-1, pre-migration)
+      - name: Force-redeploy convis-livekit-agent (ap-south-1)
         run: |
           aws ecs update-service \
-            --cluster convis \
+            --cluster default \
             --service convis-livekit-agent \
             --force-new-deployment \
-            --region ${{ env.AWS_AGENT_REGION }} \
+            --region ${{ env.AWS_REGION }} \
             --output table \
             --query 'service.{name:serviceName,desired:desiredCount,running:runningCount,status:status}'

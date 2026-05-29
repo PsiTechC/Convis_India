@@ -75,11 +75,16 @@ slowapi
 # LiveKit — all voice/calling runs through LiveKit Cloud.
 # Server SDK mints tokens and dispatches SIP participants for inbound/outbound PSTN.
 # The agents package runs in a separate worker process (see app/services/livekit/agent_worker.py).
-livekit>=0.17.0
-livekit-api>=0.8.0
-livekit-agents>=0.12.0
+# Pinned to the 1.x line (2026-05-29). The old `livekit-api>=0.8.0` floor
+# resolved to a 0.x client at image-build time, whose SIP twirp path no longer
+# matches LiveKit Cloud -> create_sip_participant returned 404 "object cannot be
+# found" on every PSTN dial (rooms still created — only the SIP leg broke).
+# These exact versions are verified locally to dial outbound SIP successfully.
+livekit==1.1.8
+livekit-api==1.1.0
+livekit-agents==1.5.12
 # livekit-plugins-openai is a transitive dependency of livekit-plugins-sarvam
 # (sarvam.LLM extends OpenAILLM) — keep it pinned via Sarvam, not directly.
 # Deepgram + ElevenLabs + Cartesia removed in the 2026-05 Sarvam migration.
-livekit-plugins-sarvam>=1.5.12
-livekit-plugins-silero>=0.7.0
+livekit-plugins-sarvam==1.5.12
+livekit-plugins-silero==1.5.12

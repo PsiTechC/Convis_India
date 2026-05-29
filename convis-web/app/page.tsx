@@ -72,9 +72,9 @@ const jsonLd = {
   operatingSystem: 'Web',
   offers: {
     '@type': 'Offer',
-    priceCurrency: 'USD',
-    price: '0.18',
-    description: 'Starting at $0.18 per minute for self-service AI agent deployment',
+    priceCurrency: 'INR',
+    price: '15',
+    description: 'Starting at ₹15 per minute for self-service AI agent deployment',
   },
   featureList: [
     'AI Voice Agents',

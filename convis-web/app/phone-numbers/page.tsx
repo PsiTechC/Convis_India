@@ -155,7 +155,7 @@ function PhoneNumbersPageContent() {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
-  const [currency, setCurrency] = useState<'USD' | 'INR'>('USD');
+  const [currency, setCurrency] = useState<'USD' | 'INR'>('INR');
   const [phoneNumbers, setPhoneNumbers] = useState<PhoneNumber[]>([]);
   const [callLogs, setCallLogs] = useState<CallLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -186,7 +186,7 @@ function PhoneNumbersPageContent() {
   // Default trunk_id is the production Convis-Vobiz LiveKit trunk; user can change.
   const [vobizForm, setVobizForm] = useState({
     phoneNumber: '',
-    trunkId: 'ST_oSruuDU6KtFJ',
+    trunkId: 'ST_M5EvyYmWGugw',
     friendlyName: '',
   });
   const [isConnecting, setIsConnecting] = useState(false);
@@ -250,28 +250,18 @@ function PhoneNumbersPageContent() {
   // Ref for call status interval cleanup
   const callStatusIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Vobiz first (default for Convis-India post-migration). Twilio kept
-  // available for users who already have Twilio numbers but is no longer
-  // the recommended path.
+  // Convis-India is Vobiz-only (Twilio removed post-migration). Direct SIP
+  // trunk via LiveKit — cheaper for India / Asia-Pac.
   const serviceProviders: ServiceProvider[] = [
     {
       id: 'vobiz',
-      name: 'Vobiz (Recommended)',
+      name: 'Vobiz',
       // Plain "V" mark — no external SVG dependency.
       logo: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIyNCIgY3k9IjI0IiByPSIyMCIgZmlsbD0id2hpdGUiLz48dGV4dCB4PSI1MCUiIHk9IjU4JSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IkFyaWFsLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjI0IiBmb250LXdlaWdodD0iYm9sZCIgZmlsbD0iIzdDM0FFRCI+VjwvdGV4dD48L3N2Zz4=',
-      description: 'Direct SIP trunk via LiveKit — cheaper for India / Asia-Pac. No Twilio middle-leg.',
+      description: 'Direct SIP trunk via LiveKit — built for India / Asia-Pac.',
       authUrl: '',
       color: 'from-purple-500 to-purple-600',
       features: ['Voice', 'India', 'SIP Trunk', 'Lower cost']
-    },
-    {
-      id: 'twilio',
-      name: 'Twilio (Legacy)',
-      logo: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIyNCIgY3k9IjI0IiByPSIyMCIgZmlsbD0id2hpdGUiLz48Y2lyY2xlIGN4PSIxNyIgY3k9IjE3IiByPSI0IiBmaWxsPSIjRjIyRjQ2Ii8+PGNpcmNsZSBjeD0iMzEiIGN5PSIxNyIgcj0iNCIgZmlsbD0iI0YyMkY0NiIvPjxjaXJjbGUgY3g9IjE3IiBjeT0iMzEiIHI9IjQiIGZpbGw9IiNGMjJGNDYiLz48Y2lyY2xlIGN4PSIzMSIgY3k9IjMxIiByPSI0IiBmaWxsPSIjRjIyRjQ2Ii8+PC9zdmc+',
-      description: 'Available for users who already have Twilio numbers. Vobiz is recommended for new numbers.',
-      authUrl: '',
-      color: 'from-red-500 to-red-600',
-      features: ['Voice', 'SMS', 'WhatsApp', 'Video']
     }
   ];
 
@@ -693,7 +683,7 @@ function PhoneNumbersPageContent() {
         setIsCredentialsModalOpen(false);
         setIsProviderModalOpen(false);
         setCredentials({ accountSid: '', authToken: '' });
-        setVobizForm({ phoneNumber: '', trunkId: 'ST_oSruuDU6KtFJ', friendlyName: '' });
+        setVobizForm({ phoneNumber: '', trunkId: 'ST_M5EvyYmWGugw', friendlyName: '' });
         setSelectedProvider(null);
         setConnectStep(1);
         setPreviewedNumbers([]);
@@ -2350,10 +2340,10 @@ function PhoneNumbersPageContent() {
                             <td className={`px-2 py-3 text-xs font-semibold ${isDarkMode ? 'text-gray-300' : 'text-neutral-dark'}`}>
                               {call.cost_calculated && call.cost_total !== undefined ? (
                                 <span className={`font-bold ${isDarkMode ? 'text-green-400' : 'text-green-600'}`}>
-                                  {currency === 'USD' ? '$' : '₹'}{call.cost_total?.toFixed(currency === 'USD' ? 4 : 2)}
+                                  ₹{call.cost_total?.toFixed(2)}
                                 </span>
                               ) : call.price ? (
-                                `$${Math.abs(parseFloat(call.price)).toFixed(4)}`
+                                `₹${Math.abs(parseFloat(call.price)).toFixed(2)}`
                               ) : (
                                 <span className={isDarkMode ? 'text-gray-500' : 'text-gray-400'}>-</span>
                               )}
@@ -2709,7 +2699,7 @@ function PhoneNumbersPageContent() {
                       type="text"
                       value={vobizForm.trunkId}
                       onChange={(e) => setVobizForm({ ...vobizForm, trunkId: e.target.value })}
-                      placeholder="ST_oSruuDU6KtFJ"
+                      placeholder="ST_M5EvyYmWGugw"
                       className={`w-full px-4 py-3 rounded-xl ${isDarkMode ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400' : 'bg-neutral-light border-neutral-mid/20 text-neutral-dark'} border focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all font-mono text-sm`}
                     />
                   </div>
@@ -2757,7 +2747,7 @@ function PhoneNumbersPageContent() {
                   setIsProviderModalOpen(true);
                   setSelectedProvider(null);
                   setCredentials({ accountSid: '', authToken: '' });
-                  setVobizForm({ phoneNumber: '', trunkId: 'ST_oSruuDU6KtFJ', friendlyName: '' });
+                  setVobizForm({ phoneNumber: '', trunkId: 'ST_M5EvyYmWGugw', friendlyName: '' });
                   setConnectStep(1);
                   setPreviewedNumbers([]);
                   setSelectedSids(new Set());
@@ -3404,15 +3394,15 @@ function PhoneNumbersPageContent() {
                     {selectedCallLog.cost_calculated && selectedCallLog.cost_total !== undefined ? (
                       <div className="space-y-1">
                         <p className={`text-2xl font-bold ${isDarkMode ? 'text-green-300' : 'text-green-900'}`}>
-                          {currency === 'USD' ? '$' : '₹'}{selectedCallLog.cost_total?.toFixed(currency === 'USD' ? 4 : 2)}
+                          ₹{selectedCallLog.cost_total?.toFixed(2)}
                         </p>
                         <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                          API: {currency === 'USD' ? '$' : '₹'}{selectedCallLog.cost_api?.toFixed(currency === 'USD' ? 4 : 2)} + Twilio: {currency === 'USD' ? '$' : '₹'}{selectedCallLog.cost_twilio?.toFixed(currency === 'USD' ? 4 : 2)}
+                          API: ₹{selectedCallLog.cost_api?.toFixed(2)} + Telephony: ₹{selectedCallLog.cost_twilio?.toFixed(2)}
                         </p>
                       </div>
                     ) : (
                       <p className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-neutral-dark'}`}>
-                        ${Math.abs(parseFloat(selectedCallLog.price!)).toFixed(4)}
+                        ₹{Math.abs(parseFloat(selectedCallLog.price!)).toFixed(2)}
                       </p>
                     )}
                   </div>

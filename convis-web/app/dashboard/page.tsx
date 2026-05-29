@@ -294,8 +294,8 @@ export default function DashboardPage() {
   };
 
   const formatCurrency = (value: number) => {
-    if (!Number.isFinite(value)) return '$0.00';
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+    if (!Number.isFinite(value)) return '₹0.00';
+    return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(value);
   };
 
   const getSentimentTotal = (sentiment: AssistantSentiment) =>

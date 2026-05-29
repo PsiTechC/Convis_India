@@ -249,24 +249,45 @@ const dedupeKnowledgeBaseFiles = (files: KnowledgeBaseFile[]) => {
   });
 };
 
-// Language options for bot responses
+// Bot response languages — Sarvam AI's 23 supported languages
+// (22 Indian languages + English).
 const LANGUAGE_OPTIONS = [
-  { value: 'en', label: 'English', flag: '🇺🇸' },
+  { value: 'en', label: 'English', flag: '🇬🇧' },
   { value: 'hi', label: 'Hindi (हिंदी)', flag: '🇮🇳' },
-  { value: 'es', label: 'Spanish (Español)', flag: '🇪🇸' },
-  { value: 'fr', label: 'French (Français)', flag: '🇫🇷' },
-  { value: 'de', label: 'German (Deutsch)', flag: '🇩🇪' },
-  { value: 'pt', label: 'Portuguese (Português)', flag: '🇵🇹' },
-  { value: 'it', label: 'Italian (Italiano)', flag: '🇮🇹' },
-  { value: 'ja', label: 'Japanese (日本語)', flag: '🇯🇵' },
-  { value: 'ko', label: 'Korean (한국어)', flag: '🇰🇷' },
-  { value: 'zh', label: 'Chinese (中文)', flag: '🇨🇳' },
-  { value: 'ar', label: 'Arabic (العربية)', flag: '🇸🇦' },
-  { value: 'ru', label: 'Russian (Русский)', flag: '🇷🇺' },
-  { value: 'nl', label: 'Dutch (Nederlands)', flag: '🇳🇱' },
-  { value: 'pl', label: 'Polish (Polski)', flag: '🇵🇱' },
-  { value: 'tr', label: 'Turkish (Türkçe)', flag: '🇹🇷' },
+  { value: 'bn', label: 'Bengali (বাংলা)', flag: '🇮🇳' },
+  { value: 'pa', label: 'Punjabi (ਪੰਜਾਬੀ)', flag: '🇮🇳' },
+  { value: 'ur', label: 'Urdu (اردو)', flag: '🇮🇳' },
+  { value: 'or', label: 'Odia (ଓଡ଼ିଆ)', flag: '🇮🇳' },
+  { value: 'sa', label: 'Sanskrit (संस्कृतम्)', flag: '🇮🇳' },
+  { value: 'ks', label: 'Kashmiri (کٲشُر)', flag: '🇮🇳' },
+  { value: 'doi', label: 'Dogri (डोगरी)', flag: '🇮🇳' },
+  { value: 'ne', label: 'Nepali (नेपाली)', flag: '🇮🇳' },
+  { value: 'ta', label: 'Tamil (தமிழ்)', flag: '🇮🇳' },
+  { value: 'te', label: 'Telugu (తెలుగు)', flag: '🇮🇳' },
+  { value: 'kn', label: 'Kannada (ಕನ್ನಡ)', flag: '🇮🇳' },
+  { value: 'ml', label: 'Malayalam (മലയാളം)', flag: '🇮🇳' },
+  { value: 'mr', label: 'Marathi (मराठी)', flag: '🇮🇳' },
+  { value: 'gu', label: 'Gujarati (ગુજરાતી)', flag: '🇮🇳' },
+  { value: 'sd', label: 'Sindhi (سنڌي)', flag: '🇮🇳' },
+  { value: 'kok', label: 'Konkani (कोंकणी)', flag: '🇮🇳' },
+  { value: 'as', label: 'Assamese (অসমীয়া)', flag: '🇮🇳' },
+  { value: 'mni', label: 'Manipuri (মৈতৈলোন্)', flag: '🇮🇳' },
+  { value: 'brx', label: 'Bodo (बड़ो)', flag: '🇮🇳' },
+  { value: 'sat', label: 'Santali (ᱥᱟᱱᱛᱟᱲᱤ)', flag: '🇮🇳' },
+  { value: 'mai', label: 'Maithili (मैथिली)', flag: '🇮🇳' },
 ];
+
+// Maps the selected Bot Language to Sarvam Bulbul's TTS output locale.
+// Bulbul natively voices 11 of the languages; everything else falls back to
+// en-IN (the LLM still replies in the chosen language, but the TTS voice
+// locale is English-India). Keeps TTS output in sync with the bot language
+// now that the separate "Output language" picker is gone.
+const BOT_LANG_TO_TTS_LANG: Record<string, string> = {
+  en: 'en-IN', hi: 'hi-IN', bn: 'bn-IN', pa: 'pa-IN', or: 'od-IN',
+  ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', ml: 'ml-IN', mr: 'mr-IN', gu: 'gu-IN',
+};
+const ttsLangForBot = (code: string | undefined) =>
+  BOT_LANG_TO_TTS_LANG[code || 'en'] || 'en-IN';
 
 // Sarvam Bulbul voices - mapped from provider-config.ts (TTS migration 2026-05-23)
 const VOICE_OPTIONS: VoiceOption[] = ENHANCED_TTS_VOICES.sarvam.map(v => ({
@@ -958,7 +979,7 @@ export default function AIAgentPage() {
             // Cartesia-only knobs. Always sent (server ignores them on ElevenLabs);
             // NEVER hardcode — formData is the source of truth (see CLAUDE.md
             // hardcode-clobber history).
-            tts_language: formData.tts_language || 'en-IN',
+            tts_language: ttsLangForBot(formData.bot_language),
             tts_emotion: formData.tts_emotion || [],
             llm_provider: 'sarvam',
             llm_model: formData.llm_model || 'sarvam-105b',
@@ -1051,7 +1072,7 @@ export default function AIAgentPage() {
             // Cartesia-only knobs. Always sent (server ignores them on ElevenLabs);
             // NEVER hardcode — formData is the source of truth (see CLAUDE.md
             // hardcode-clobber history).
-            tts_language: formData.tts_language || 'en-IN',
+            tts_language: ttsLangForBot(formData.bot_language),
             tts_emotion: formData.tts_emotion || [],
             llm_provider: 'sarvam',
             llm_model: formData.llm_model || 'sarvam-105b',
@@ -2771,72 +2792,16 @@ export default function AIAgentPage() {
                 </div>
               </div>
               {/* TTS configuration — Sarvam Bulbul only (post-migration 2026-05-23).
-                  No provider toggle: Convis-India is locked to Sarvam. Two
-                  Sarvam-native knobs are exposed: output language (Bulbul's
-                  11 BCP-47 Indic codes) and the Bulbul model (v3 default, v2
-                  available for assistants that need v2-only voices like
-                  anushka). The voice picker further below filters per model. */}
+                  Model is fixed to the default (bulbul:v3) and the output
+                  language follows the Bot Language selected above — no separate
+                  pickers. The voice picker further below filters per model. */}
               <div className={`mb-6 p-4 rounded-xl border ${isDarkMode ? 'border-gray-700 bg-gray-800' : 'border-neutral-light bg-white'}`}>
                 <p className={`text-sm font-semibold mb-1 ${isDarkMode ? 'text-white' : 'text-neutral-dark'}`}>
                   TTS — Sarvam Bulbul
                 </p>
-                <p className={`text-xs mb-4 ${isDarkMode ? 'text-gray-400' : 'text-neutral-mid'}`}>
-                  Indic-tuned text-to-speech. Pick the output language and Bulbul model — the voice picker below will filter to compatible speakers.
+                <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-neutral-mid'}`}>
+                  Indic-tuned text-to-speech (Bulbul v3, default). Speaks in the Bot Language you selected above — just pick a voice below.
                 </p>
-
-                <label className={`block text-xs font-medium mb-1 ${isDarkMode ? 'text-gray-300' : 'text-neutral-dark'}`}>
-                  Output language
-                </label>
-                <select
-                  value={formData.tts_language || 'en-IN'}
-                  onChange={(e) => setFormData({ ...formData, tts_language: e.target.value })}
-                  className={`w-full p-2 rounded-lg border text-sm mb-4 ${
-                    isDarkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-neutral-light text-neutral-dark'
-                  }`}
-                >
-                  {[
-                    { v: 'en-IN', l: 'English (India) — default' },
-                    { v: 'hi-IN', l: 'Hindi' },
-                    { v: 'bn-IN', l: 'Bengali' },
-                    { v: 'gu-IN', l: 'Gujarati' },
-                    { v: 'kn-IN', l: 'Kannada' },
-                    { v: 'ml-IN', l: 'Malayalam' },
-                    { v: 'mr-IN', l: 'Marathi' },
-                    { v: 'od-IN', l: 'Odia' },
-                    { v: 'pa-IN', l: 'Punjabi' },
-                    { v: 'ta-IN', l: 'Tamil' },
-                    { v: 'te-IN', l: 'Telugu' },
-                  ].map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
-                </select>
-
-                <label className={`block text-xs font-medium mb-1 ${isDarkMode ? 'text-gray-300' : 'text-neutral-dark'}`}>
-                  Bulbul model
-                </label>
-                <select
-                  value={formData.tts_model || 'bulbul:v3'}
-                  onChange={(e) => {
-                    // Switching model can invalidate the current speaker
-                    // (anushka is v2-only, pooja is v3-only). The backend
-                    // coercion downgrades incompatible combos at agent load,
-                    // but we also reset speaker on the client so the picker
-                    // below doesn't show a stale selection.
-                    const newModel = e.target.value;
-                    const newDefaultSpeaker = newModel === 'bulbul:v2' ? 'anushka' : 'shubh';
-                    setFormData({
-                      ...formData,
-                      tts_model: newModel,
-                      tts_voice: newDefaultSpeaker,
-                      voice: newDefaultSpeaker,
-                    });
-                  }}
-                  className={`w-full p-2 rounded-lg border text-sm ${
-                    isDarkMode ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-neutral-light text-neutral-dark'
-                  }`}
-                >
-                  <option value="bulbul:v3">Bulbul v3 — Default (30 voices, streaming)</option>
-                  <option value="bulbul:v3-beta">Bulbul v3-beta (25 voices)</option>
-                  <option value="bulbul:v2">Bulbul v2 — Legacy (7 voices incl. anushka)</option>
-                </select>
               </div>
 
               {/* Expressive Mode toggle — opt-in. Tells the LLM to use natural

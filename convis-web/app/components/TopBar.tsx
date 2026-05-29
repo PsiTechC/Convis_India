@@ -45,7 +45,7 @@ export function TopBar({
   rightContentBefore,
   rightContentAfter,
   showNotifications = true,
-  currency = 'USD',
+  currency = 'INR',
   onCurrencyToggle,
   token,
 }: TopBarProps) {
@@ -124,17 +124,6 @@ export function TopBar({
 
         <div className="flex items-center gap-2">
           {rightContentBefore}
-
-          {onCurrencyToggle && (
-            <button
-              onClick={onCurrencyToggle}
-              title={`Switch to ${currency === 'USD' ? 'INR' : 'USD'}`}
-              className={`px-3 py-2 rounded-xl ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600 text-gray-300' : 'bg-neutral-light hover:bg-neutral-mid/20 text-neutral-dark'} transition-all font-semibold text-sm flex items-center gap-1.5`}
-            >
-              <span className="text-xs font-bold">{currency === 'USD' ? '$' : '₹'}</span>
-              <span>{currency}</span>
-            </button>
-          )}
 
           <button
             onClick={handleToggleTheme}

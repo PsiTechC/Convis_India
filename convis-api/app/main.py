@@ -160,6 +160,12 @@ logging.info(f"CORS allowed origins: {allowed_origins}")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    # Always allow any localhost / 127.0.0.1 origin on any port for local dev,
+    # regardless of the ENVIRONMENT flag. Starlette echoes back the matched
+    # origin (so this is credential-safe) and short-circuits the preflight,
+    # fixing the "Disallowed CORS origin" 400 when the dev port isn't in the
+    # explicit list above.
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
