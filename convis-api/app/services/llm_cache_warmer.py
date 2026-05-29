@@ -1,17 +1,23 @@
-"""Keeps OpenAI's prompt cache warm for every active assistant.
+"""Keeps the LLM provider warm for every active assistant.
 
-Why this exists: OpenAI's prompt cache TTL is ~5 minutes. If an assistant goes
-that long without a call, the next call's first turn pays the full prompt-
-processing cost (≈1s for a 1700-token system_message on gpt-4o-mini, longer on
-gpt-4-turbo). For a real-estate agent that gets sporadic traffic, that's a bad
-first impression on every call.
+Why this exists: a sporadic-traffic assistant pays the full first-turn cost on
+every cold call. This loop fires a tiny 1-token completion every ~4 minutes per
+unique assistant prompt, with the EXACT prompt assembly the agent uses at call
+time, so the provider edge (connection routing, model warm pool) stays hot.
 
-This warmer fires a tiny 1-token completion every ~4 minutes for each active
-assistant, with the EXACT prompt assembly the agent uses at call time. Cache
-stays warm 24/7 → every real call hits the warm path.
+Provider handling:
+- OpenAI (legacy): the call also primes OpenAI's ~5-min prompt cache via the
+  explicit prompt_cache_key, so the next real call's prefix is cached server-side.
+- Sarvam (current live stack): Sarvam's OpenAI-compatible API has NO prompt
+  cache (verified — usage returns no cached_tokens, and `prompt_cache_key` is
+  not an accepted param). So on Sarvam this loop does NOT cache tokens; it keeps
+  the HTTPS/edge path + model routing warm for the assistant. The per-turn
+  prompt-processing cost is unchanged; only cold-start jitter is reduced.
 
-Cost per assistant: ~360 calls/day × ~$0.0005 (1 output token, mostly cached
-input) ≈ $0.20/day. Cheap insurance.
+The warmer auto-selects the provider: Sarvam when SARVAM_API_KEY is set,
+otherwise OpenAI when OPENAI_API_KEY is set.
+
+Cost: 1 output token per assistant per ~4 min. Negligible.
 """
 from __future__ import annotations
 
@@ -29,16 +35,20 @@ logger = logging.getLogger(__name__)
 # drift and request-processing time so we never miss the window.
 WARMER_INTERVAL_SECONDS = 240
 
-# OpenAI prompt caching only activates after ~1024 prompt tokens. Skip
-# assistants whose system_message is too short to benefit.
+# Only warm assistants whose prompt is non-trivial. On OpenAI prompt caching
+# activates after ~1024 prompt tokens; on Sarvam there's no cache but a short
+# prompt warms instantly anyway, so this just avoids pointless heartbeats.
 MIN_SYSTEM_MESSAGE_CHARS = 4000  # ~1000 tokens at 4 chars/token average
 
 
-async def _warm_one(client, assistant: dict, sent_keys: Set[str]) -> bool:
-    """Fire a tiny LLM call to warm OpenAI's prompt cache for this assistant.
-    Returns True if a request was sent. Skips assistants whose prompt is too
-    short to be cached, and dedupes by content hash so two assistants sharing
-    the same system_message only get one heartbeat.
+async def _warm_one(client, assistant: dict, sent_keys: Set[str], provider: str) -> bool:
+    """Fire a tiny LLM call to warm the provider for this assistant.
+
+    On OpenAI this also primes the server-side prompt cache (via prompt_cache_key).
+    On Sarvam there is no prompt cache, so it warms the connection/model routing
+    only. Returns True if a request was sent. Skips assistants whose prompt is too
+    short to be worth warming, and dedupes by content hash so two assistants
+    sharing the same system_message only get one heartbeat.
     """
     base = assistant.get("system_message") or ""
     if len(base) < MIN_SYSTEM_MESSAGE_CHARS:
@@ -109,60 +119,90 @@ async def _warm_one(client, assistant: dict, sent_keys: Set[str]) -> bool:
         outbound_followup_timezone=followup_tz,
     )
 
-    # Dedupe by hash of the actual prompt prefix that hits OpenAI's cache.
+    # Dedupe by hash of the prompt prefix. Two assistants with an identical
+    # system_message warm once (and on OpenAI share the same cache bucket).
     key = hashlib.sha256(system_message.encode("utf-8")).hexdigest()
     if key in sent_keys:
         return False
     sent_keys.add(key)
 
-    # Explicit prompt_cache_key per assistant — must match what the agent_worker
-    # passes when constructing openai.LLM(prompt_cache_key=assistant_id). Without
-    # this, OpenAI auto-infers a cache key from the prompt prefix; that
-    # inference is unreliable across the bare-SDK warmer vs livekit's wrapped
-    # chat() call → cache misses. Setting a deterministic key makes both routes
-    # share the same cache bucket reliably.
     cache_key = str(assistant.get("_id")) if assistant.get("_id") is not None else "unknown-assistant"
     try:
-        # `prompt_cache_key` was sent via extra_body before — but the openai
-        # SDK >=2.x exposes it as a NATIVE top-level parameter. The agent uses
-        # the native param (via livekit-plugins-openai). Sending via extra_body
-        # vs native may take different code paths in the SDK and produce
-        # subtly different request fingerprints → cache miss. Pass it natively
-        # to guarantee the warmer and agent hit the same cache shard.
-        await client.chat.completions.create(
-            model=assistant.get("llm_model") or "gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": "."},
-            ],
-            max_completion_tokens=1,
-            temperature=0.0,
-            timeout=15.0,
-            prompt_cache_key=cache_key,
-        )
+        if provider == "sarvam":
+            # Sarvam (OpenAI-compatible /v1, no prompt cache). Default model is
+            # the live sarvam-105b. `/nothink` already lives in system_message
+            # via build_system_message, so we don't re-add it. max_tokens (not
+            # max_completion_tokens — Sarvam uses the legacy name) capped at 1.
+            # No prompt_cache_key: Sarvam rejects/ignores it. This warms the
+            # connection + model routing, not a token cache.
+            await client.chat.completions.create(
+                model=assistant.get("llm_model") or "sarvam-105b",
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": "."},
+                ],
+                max_tokens=1,
+                temperature=0.0,
+                timeout=15.0,
+            )
+        else:
+            # OpenAI: explicit prompt_cache_key per assistant — must match what
+            # agent_worker passes so the warmer and the live call share the same
+            # server-side cache shard. Native top-level param (SDK >=2.x).
+            await client.chat.completions.create(
+                model=assistant.get("llm_model") or "gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": "."},
+                ],
+                max_completion_tokens=1,
+                temperature=0.0,
+                timeout=15.0,
+                prompt_cache_key=cache_key,
+            )
         return True
     except Exception:
         logger.warning(
-            "LLM cache warm failed for assistant %s",
-            assistant.get("_id"),
+            "LLM warm failed for assistant %s (provider=%s)",
+            assistant.get("_id"), provider,
             exc_info=True,
         )
         return False
 
 
 async def _warm_all_once() -> None:
-    """One pass: walk all assistants in Mongo and warm each unique prompt."""
-    if not os.getenv("OPENAI_API_KEY"):
-        logger.debug("OPENAI_API_KEY not set; skipping cache warm")
-        return
+    """One pass: walk all assistants in Mongo and warm each unique prompt.
+
+    Provider auto-select: Sarvam if SARVAM_API_KEY is set (the live India stack),
+    else OpenAI if OPENAI_API_KEY is set, else skip.
+    """
+    sarvam_key = os.getenv("SARVAM_API_KEY")
+    openai_key = os.getenv("OPENAI_API_KEY")
 
     try:
         from openai import AsyncOpenAI
     except Exception:
-        logger.warning("openai package not importable; skipping cache warm")
+        logger.warning("openai package not importable; skipping LLM warm")
         return
 
-    client = AsyncOpenAI()
+    if sarvam_key:
+        provider = "sarvam"
+        # Sarvam exposes an OpenAI-compatible API; auth is via the
+        # `api-subscription-key` header, not Bearer. The AsyncOpenAI client
+        # sends Authorization: Bearer by default, so we add the Sarvam header
+        # explicitly and point base_url at Sarvam's /v1.
+        client = AsyncOpenAI(
+            api_key=sarvam_key,
+            base_url="https://api.sarvam.ai/v1",
+            default_headers={"api-subscription-key": sarvam_key},
+        )
+    elif openai_key:
+        provider = "openai"
+        client = AsyncOpenAI()
+    else:
+        logger.debug("Neither SARVAM_API_KEY nor OPENAI_API_KEY set; skipping LLM warm")
+        return
+
     db = Database.get_db()
     # Pull all fields the warmer needs to reconstruct the EXACT prompt the
     # agent sends. Adding a field to build_system_message() requires adding it
@@ -199,14 +239,15 @@ async def _warm_all_once() -> None:
     sent_keys: Set[str] = set()
     warmed = 0
     for a in assistants:
-        if await _warm_one(client, a, sent_keys):
+        if await _warm_one(client, a, sent_keys, provider):
             warmed += 1
-        # Gentle pacing — avoids bursting OpenAI's rate limiter on shops with
-        # many assistants. 50 ms × 100 assistants = 5 s, well under interval.
+        # Gentle pacing — avoids bursting the provider's rate limiter on shops
+        # with many assistants. 50 ms × 100 assistants = 5 s, well under interval.
         await asyncio.sleep(0.05)
 
     logger.info(
-        "[LLM_CACHE_WARMER] warmed %d unique prompts across %d assistants",
+        "[LLM_CACHE_WARMER] provider=%s warmed %d unique prompts across %d assistants",
+        provider,
         warmed,
         len(assistants),
     )

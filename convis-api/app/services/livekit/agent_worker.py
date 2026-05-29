@@ -1349,15 +1349,50 @@ async def entrypoint(ctx: JobContext) -> None:
 
     ctx.add_shutdown_callback(_cancel_watchdog)
 
+    # First-turn LLM warm-up: fire a tiny throwaway completion with THIS
+    # assistant's real system prompt, concurrently with the greeting. While the
+    # caller hears the (LLM-free) greeting, the Sarvam connection + model routing
+    # for this prompt go hot, so the first REAL turn comes back faster.
+    #
+    # Note: Sarvam has no server-side prompt cache (verified — usage returns no
+    # cached_tokens and prompt_cache_key isn't an accepted param), so this warms
+    # the path/connection, not a token cache. It does NOT reduce per-turn prompt
+    # processing — only first-turn cold-start jitter. Fire-and-forget; any
+    # failure is swallowed so it can never delay or break the greeting.
+    async def _warm_first_turn() -> None:
+        try:
+            sys_msg = config.get("system_message") or ""
+            if len(sys_msg) < 200:
+                return
+            from openai import AsyncOpenAI
+            sk = os.getenv("SARVAM_API_KEY")
+            if not sk:
+                return
+            client = AsyncOpenAI(
+                api_key=sk,
+                base_url="https://api.sarvam.ai/v1",
+                default_headers={"api-subscription-key": sk},
+            )
+            await client.chat.completions.create(
+                model=config.get("llm_model") or "sarvam-105b",
+                messages=[
+                    {"role": "system", "content": sys_msg},
+                    {"role": "user", "content": "."},
+                ],
+                max_tokens=1,
+                temperature=0.0,
+                timeout=10.0,
+            )
+            logger.info("[AGENT] first-turn LLM warm-up sent")
+        except Exception:
+            logger.debug("[AGENT] first-turn warm-up failed (non-fatal)", exc_info=True)
+
+    asyncio.create_task(_warm_first_turn())
+
     # Greeting via session.say(): goes straight to TTS, bypassing the LLM.
     # Saves the LLM round-trip on greeting (~300-500ms) AND makes greeting
     # deterministic — no risk of the LLM "creatively" rephrasing the configured
     # greeting.
-    #
-    # No LLM cache warmup: Sarvam has no equivalent of OpenAI's prompt_cache_key,
-    # so the concurrent warmup task that used to fire here is gone. First-turn
-    # TTFT pays the full prompt-processing cost (~1.5-3s on sarvam-105b with
-    # /nothink) every cold call. Mitigations are prompt trimming, not warming.
     greeting = config.get("greeting") or "Hello! How can I help you today?"
     if config.get("resumed_after_failed_transfer"):
         # We got here because a transfer to a human didn't connect (no-answer/

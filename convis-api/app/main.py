@@ -149,6 +149,7 @@ production_origins = [
     "https://api.convis.ai",
     "https://convis.ai",          # marketing landing (apex, served via 301 → www)
     "https://www.convis.ai",      # marketing landing (CloudFront)
+    "https://india.convis.ai",    # Convis-India dashboard (ap-south-1 ALB custom domain)
     "https://convis-web-1035304851064.europe-west1.run.app",  # Cloud Run frontend
 ]
 for origin in production_origins:
@@ -315,12 +316,17 @@ async def startup_event():
         except Exception as e:
             logger.warning(f"⚠️ Campaign scheduler failed to start: {e}")
 
-        # 5. LLM cache warmer removed — Sarvam-105b has no equivalent of
-        # OpenAI's prompt_cache_key, so the background loop that used to fire
-        # 1-token completions to keep the cache hot is dead code. First-turn
-        # TTFT pays the full prompt-processing cost (~1.5-3s) on every cold
-        # call. See llm_cache_warmer.py (kept on disk for reference until the
-        # next sweep) and the dead-code note in agent_worker.py.
+        # 5. Start LLM warmer loop. Provider auto-selects (Sarvam when
+        # SARVAM_API_KEY set, else OpenAI). On Sarvam there is no server-side
+        # prompt cache, so this keeps the provider connection/model routing warm
+        # for each active assistant rather than caching tokens; on OpenAI it
+        # also primes the prompt cache. See llm_cache_warmer.py.
+        try:
+            from app.services.llm_cache_warmer import cache_warmer_loop
+            asyncio.create_task(cache_warmer_loop())
+            logger.info("✅ LLM warmer loop started")
+        except Exception as e:
+            logger.warning(f"⚠️ LLM warmer loop failed to start: {e}")
 
         # 6. Start post-call summary backfill loop (P1 conversation-memory
         # feature). Catches orphans where the webhook fire-and-forget
