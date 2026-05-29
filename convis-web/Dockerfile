@@ -22,12 +22,19 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# NEXT_PUBLIC_* are baked into the JS bundle at build time. Accept them as
+# build-args from CI so changing the API URL doesn't require editing .env.production.
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_API_BASE_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
+
 # Set environment variables for build
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 ENV SKIP_ENV_VALIDATION=1
 
-# Build the application (uses .env.production file)
+# Build the application (also picks up .env.production for any vars not set above)
 RUN npm run build
 
 # Production image, copy all the files and run next

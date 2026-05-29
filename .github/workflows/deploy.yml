@@ -1,17 +1,21 @@
 name: Deploy to AWS
 
 # When this runs:
-#   - push to main / Tejas-feature-branch → full deploy
-#   - workflow_dispatch → manual run from Actions tab (useful for first deploy)
+#   - push to main → full deploy (api + web to ap-south-1, agent stays in us-east-1 for now)
+#   - workflow_dispatch → manual run from Actions tab (useful for first deploy / forced rebuild)
 #
 # What this does:
 #   1. Builds Docker images for convis-api and convis-web on amd64
-#   2. Pushes them to ECR with two tags: :latest and :sha-<short-git-sha>
-#   3. Triggers App Runner redeploys for convis-api and convis-web
-#   4. Forces ECS Fargate to pull the new :latest for the agent worker
-#C:\Users\Tejas-Psitech\Desktop\Psitech\Convis_India\.github\workflows\deploy.yml
+#   2. Pushes convis-api to BOTH ap-south-1 ECR (for the new ECS Express Mode api service)
+#      AND us-east-1 ECR (so the still-running us-east-1 agent task keeps getting new images).
+#      Once the agent is migrated to ap-south-1, the us-east-1 push step can be removed.
+#   3. Pushes convis-web to ap-south-1 ECR only.
+#   4. Forces ECS Express Mode services (convis-api, convis-web in `default` cluster, ap-south-1)
+#      to pull the new :latest.
+#   5. Forces the us-east-1 agent service (cluster `convis`) to pull the new :latest.
+#
 # Auth: federated OIDC, no long-lived AWS keys stored in GitHub. The IAM role
-# `GitHubActionsConvisDeployRole` is restricted to this repo (any branch/PR).
+# `GitHubActionsConvisDeployRole` is restricted to this repo.
 on:
   push:
     branches:
@@ -24,9 +28,11 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_REGION: ${{ vars.AWS_REGION }}              # ap-south-1 — primary region for api/web
+  AWS_AGENT_REGION: us-east-1                     # TEMP: agent still lives here until Part 8 migration
   AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
-  ECR_REGISTRY: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
+  ECR_REGISTRY_PRIMARY: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
+  ECR_REGISTRY_LEGACY: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
   IMAGE_TAG: ${{ github.sha }}
 
 jobs:
@@ -56,8 +62,9 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────
   # Build + push convis-api image. This SAME image is used by both
-  # App Runner (HTTP entrypoint) and ECS Fargate (agent worker entrypoint).
-  # The ECS task definition overrides the container CMD.
+  # the ap-south-1 ECS Express Mode api service AND the us-east-1
+  # ECS Fargate agent worker (with a CMD override in the agent task def).
+  # We push to BOTH regions' ECR until the agent migrates to ap-south-1.
   # ─────────────────────────────────────────────────────────────────────
   build-api:
     needs: detect-changes
@@ -72,8 +79,19 @@ jobs:
           role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubActionsConvisDeployRole
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2
+      - name: Login to ap-south-1 ECR (primary)
+        run: |
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} \
+            | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY_PRIMARY }}
+
+      # TEMPORARY: also push to us-east-1 ECR so the still-running us-east-1
+      # convis-livekit-agent keeps receiving new convis-api images. Remove
+      # this step (and the us-east-1 push tags below) after the agent is
+      # migrated to ap-south-1 (Part 8 of deployment-docs/aws/AWS_ECS_EXPRESS_MODE.md).
+      - name: Login to us-east-1 ECR (legacy, for agent)
+        run: |
+          aws ecr get-login-password --region ${{ env.AWS_AGENT_REGION }} \
+            | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY_LEGACY }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -81,7 +99,7 @@ jobs:
       # The convis-api Dockerfile installs PyTorch CPU-only (~200MB) which is
       # slow. Buildx layer caching across runs cuts subsequent builds from
       # ~8 min to ~2 min on the same Dockerfile + requirements.txt.
-      - name: Build and push convis-api image
+      - name: Build and push convis-api image (ap-south-1 + us-east-1)
         uses: docker/build-push-action@v5
         with:
           context: ./convis-api
@@ -90,25 +108,37 @@ jobs:
           push: true
           provenance: false
           tags: |
-            ${{ env.ECR_REGISTRY }}/convis-api:latest
-            ${{ env.ECR_REGISTRY }}/convis-api:${{ env.IMAGE_TAG }}
+            ${{ env.ECR_REGISTRY_PRIMARY }}/convis-api:latest
+            ${{ env.ECR_REGISTRY_PRIMARY }}/convis-api:${{ env.IMAGE_TAG }}
+            ${{ env.ECR_REGISTRY_LEGACY }}/convis-api:latest
+            ${{ env.ECR_REGISTRY_LEGACY }}/convis-api:${{ env.IMAGE_TAG }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Defensive — App Runner / ECS only roll when the manifest is actually
-      # in ECR. The buildx --push silent-failure mode has bitten us before.
-      - name: Verify image landed in ECR
+      # Defensive — `docker buildx --push` can silently fail to write the manifest.
+      # Without this check, ECS will then crash-loop on CannotPullContainerError.
+      - name: Verify image landed in ap-south-1 ECR
         run: |
           aws ecr describe-images \
             --repository-name convis-api \
             --image-ids imageTag=${{ env.IMAGE_TAG }} \
             --region ${{ env.AWS_REGION }} \
-            --query 'imageDetails[0].imageTags' || (echo "Image NOT pushed to ECR — aborting" && exit 1)
+            --query 'imageDetails[0].imageTags' || (echo "Image NOT pushed to ap-south-1 ECR — aborting" && exit 1)
+
+      - name: Verify image landed in us-east-1 ECR
+        run: |
+          aws ecr describe-images \
+            --repository-name convis-api \
+            --image-ids imageTag=${{ env.IMAGE_TAG }} \
+            --region ${{ env.AWS_AGENT_REGION }} \
+            --query 'imageDetails[0].imageTags' || (echo "Image NOT pushed to us-east-1 ECR — aborting" && exit 1)
 
   # ─────────────────────────────────────────────────────────────────────
-  # Build + push convis-web image. NEXT_PUBLIC_* env vars are baked into
-  # the Next.js bundle at build time — they MUST come in as --build-arg,
-  # not as App Runner runtime env vars (which the browser never sees).
+  # Build + push convis-web image to ap-south-1 ECR only (no us-east-1
+  # web service exists). NEXT_PUBLIC_* env vars are baked into the
+  # Next.js bundle at build time via --build-arg — the Dockerfile must
+  # declare matching `ARG NEXT_PUBLIC_API_URL` lines for this to take
+  # effect (see convis-web/Dockerfile).
   # ─────────────────────────────────────────────────────────────────────
   build-web:
     needs: detect-changes
@@ -123,8 +153,10 @@ jobs:
           role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubActionsConvisDeployRole
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2
+      - name: Login to ap-south-1 ECR
+        run: |
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} \
+            | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY_PRIMARY }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -138,10 +170,11 @@ jobs:
           push: true
           provenance: false
           tags: |
-            ${{ env.ECR_REGISTRY }}/convis-web:latest
-            ${{ env.ECR_REGISTRY }}/convis-web:${{ env.IMAGE_TAG }}
+            ${{ env.ECR_REGISTRY_PRIMARY }}/convis-web:latest
+            ${{ env.ECR_REGISTRY_PRIMARY }}/convis-web:${{ env.IMAGE_TAG }}
           build-args: |
             NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
+            NEXT_PUBLIC_API_BASE_URL=${{ vars.NEXT_PUBLIC_API_URL }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -154,7 +187,9 @@ jobs:
             --query 'imageDetails[0].imageTags' || (echo "Image NOT pushed to ECR — aborting" && exit 1)
 
   # ─────────────────────────────────────────────────────────────────────
-  # Roll the App Runner services. App Runner picks up :latest from ECR.
+  # Force ECS Express Mode convis-api (ap-south-1, cluster `default`) to
+  # pull the new :latest tag. Express Mode uses standard ECS underneath,
+  # so `update-service --force-new-deployment` works the same way.
   # ─────────────────────────────────────────────────────────────────────
   deploy-api:
     needs: build-api
@@ -166,18 +201,20 @@ jobs:
           role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubActionsConvisDeployRole
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Trigger App Runner deployment — convis-api
+      - name: Force-redeploy convis-api on ECS Express Mode (ap-south-1)
         run: |
-          SERVICE_ARN=$(aws apprunner list-services --region ${{ env.AWS_REGION }} \
-            --query "ServiceSummaryList[?ServiceName=='convis-api'].ServiceArn|[0]" \
-            --output text)
-          if [ "$SERVICE_ARN" = "None" ] || [ -z "$SERVICE_ARN" ]; then
-            echo "convis-api App Runner service not found. Create it manually first (see deploy doc)."
-            exit 1
-          fi
-          aws apprunner start-deployment --service-arn "$SERVICE_ARN" --region ${{ env.AWS_REGION }}
-          echo "Deployment triggered for $SERVICE_ARN"
+          aws ecs update-service \
+            --cluster default \
+            --service convis-api \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }} \
+            --output table \
+            --query 'service.{name:serviceName,desired:desiredCount,running:runningCount,status:status}'
 
+  # ─────────────────────────────────────────────────────────────────────
+  # Force ECS Express Mode convis-web (ap-south-1, cluster `default`) to
+  # pull the new :latest tag.
+  # ─────────────────────────────────────────────────────────────────────
   deploy-web:
     needs: build-web
     runs-on: ubuntu-latest
@@ -188,22 +225,24 @@ jobs:
           role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubActionsConvisDeployRole
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Trigger App Runner deployment — convis-web
+      - name: Force-redeploy convis-web on ECS Express Mode (ap-south-1)
         run: |
-          SERVICE_ARN=$(aws apprunner list-services --region ${{ env.AWS_REGION }} \
-            --query "ServiceSummaryList[?ServiceName=='convis-web'].ServiceArn|[0]" \
-            --output text)
-          if [ "$SERVICE_ARN" = "None" ] || [ -z "$SERVICE_ARN" ]; then
-            echo "convis-web App Runner service not found. Create it manually first."
-            exit 1
-          fi
-          aws apprunner start-deployment --service-arn "$SERVICE_ARN" --region ${{ env.AWS_REGION }}
-          echo "Deployment triggered for $SERVICE_ARN"
+          aws ecs update-service \
+            --cluster default \
+            --service convis-web \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }} \
+            --output table \
+            --query 'service.{name:serviceName,desired:desiredCount,running:runningCount,status:status}'
 
   # ─────────────────────────────────────────────────────────────────────
   # Force ECS Fargate to pull the new convis-api:latest and replace the
   # agent worker task. --force-new-deployment doesn't need a new task def
   # since the task def references :latest.
+  #
+  # TEMPORARY: agent is still in us-east-1 cluster `convis`. After Part 8
+  # (agent migration to ap-south-1), change cluster: `default` and remove
+  # the explicit --region (let it inherit AWS_REGION = ap-south-1).
   # ─────────────────────────────────────────────────────────────────────
   deploy-agent:
     needs: build-api    # agent uses the convis-api image
@@ -213,14 +252,14 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GitHubActionsConvisDeployRole
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ env.AWS_AGENT_REGION }}
 
-      - name: Force-redeploy convis-livekit-agent
+      - name: Force-redeploy convis-livekit-agent (us-east-1, pre-migration)
         run: |
           aws ecs update-service \
             --cluster convis \
             --service convis-livekit-agent \
             --force-new-deployment \
-            --region ${{ env.AWS_REGION }} \
+            --region ${{ env.AWS_AGENT_REGION }} \
             --output table \
             --query 'service.{name:serviceName,desired:desiredCount,running:runningCount,status:status}'
